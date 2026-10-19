@@ -9,7 +9,7 @@ export default function HighRiskTable({
   const [searchTerm, setSearchTerm] = useState('');
 
   const employees = highRiskData.employees || [];
-  const totalCount = highRiskData.total_count || 0;
+  const totalCount = highRiskData.total_count ?? highRiskData.total ?? 0;
   const totalPages = highRiskData.total_pages || 1;
   const perPage = highRiskData.per_page || 15;
 
@@ -17,11 +17,11 @@ export default function HighRiskTable({
   const filteredEmployees = employees.filter((emp) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase().trim();
-    const matchId = String(emp.employee_number).toLowerCase().includes(term);
-    const matchDept = String(emp.department).toLowerCase().includes(term);
-    const matchRole = String(emp.job_role).toLowerCase().includes(term);
-    const matchFactors = (emp.matched_factors || []).some((f) =>
-      f.toLowerCase().includes(term)
+    const matchId = String(emp.employee_number || '').toLowerCase().includes(term);
+    const matchDept = String(emp.department || '').toLowerCase().includes(term);
+    const matchRole = String(emp.job_role || '').toLowerCase().includes(term);
+    const matchFactors = (emp.matched_factors || emp.risk_reasons || []).some((f) =>
+      String(f).toLowerCase().includes(term)
     );
     return matchId || matchDept || matchRole || matchFactors;
   });
@@ -92,14 +92,16 @@ export default function HighRiskTable({
                 </tr>
               ) : (
                 filteredEmployees.map((emp) => {
-                  const riskClass =
-                    emp.risk_level === 'high' ? 'high' : emp.risk_level === 'medium' ? 'medium' : 'low';
-                  const factorsList = (emp.matched_factors || []).join(', ') || 'N/A';
+                  const riskClass = String(emp.risk_level || 'low').toLowerCase();
+                  const factorsList = (emp.matched_factors || emp.risk_reasons || []).join(', ') || 'N/A';
+                  const empIdDisplay = String(emp.employee_number || 'N/A').startsWith('#')
+                    ? emp.employee_number
+                    : `#${emp.employee_number}`;
 
                   return (
                     <tr key={emp.employee_number}>
                       <td>
-                        <strong style={{ fontFamily: 'monospace' }}>#{emp.employee_number}</strong>
+                        <strong style={{ fontFamily: 'monospace' }}>{empIdDisplay}</strong>
                       </td>
                       <td>{emp.age}</td>
                       <td>{emp.department}</td>

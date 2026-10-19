@@ -9,9 +9,33 @@ import pandas as pd
 from . import data_loader as dl
 
 
+def _safe_int(val, default=0):
+    if pd.isna(val) or val is None or val == "":
+        return default
+    try:
+        return int(float(val))
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(val, default=0.0):
+    if pd.isna(val) or val is None or val == "":
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_str(val, default=""):
+    if pd.isna(val) or val is None:
+        return default
+    return str(val).strip()
+
+
 def _attrition_breakdown(group_col, label_col=None):
     """Generic helper: compute attrition count, total, and rate grouped by a column."""
-    if dl.df is None or len(dl.df) == 0 or group_col not in dl.df.columns:
+    if dl.df is None or len(dl.df) == 0 or group_col not in dl.df.columns or "AttritionFlag" not in dl.df.columns:
         return []
     col = label_col if label_col and label_col in dl.df.columns else group_col
     grouped = dl.df.groupby(col).agg(
@@ -19,7 +43,8 @@ def _attrition_breakdown(group_col, label_col=None):
         attrition=("AttritionFlag", "sum"),
     ).reset_index()
     grouped["retention"] = grouped["total"] - grouped["attrition"]
-    grouped["rate"] = (grouped["attrition"] / grouped["total"] * 100).round(2)
+    denom = grouped["total"].replace(0, 1)
+    grouped["rate"] = (grouped["attrition"] / denom * 100).round(2)
     grouped = grouped.rename(columns={col: "label"})
     grouped["label"] = grouped["label"].astype(str)
     return grouped.sort_values("rate", ascending=False).to_dict(orient="records")
@@ -27,14 +52,15 @@ def _attrition_breakdown(group_col, label_col=None):
 
 def _band_breakdown(band_col):
     """Compute attrition breakdown for pre-computed band columns."""
-    if dl.df is None or len(dl.df) == 0 or band_col not in dl.df.columns:
+    if dl.df is None or len(dl.df) == 0 or band_col not in dl.df.columns or "AttritionFlag" not in dl.df.columns:
         return []
     grouped = dl.df.groupby(band_col, observed=True).agg(
         total=("AttritionFlag", "size"),
         attrition=("AttritionFlag", "sum"),
     ).reset_index()
     grouped["retention"] = grouped["total"] - grouped["attrition"]
-    grouped["rate"] = (grouped["attrition"] / grouped["total"] * 100).round(2)
+    denom = grouped["total"].replace(0, 1)
+    grouped["rate"] = (grouped["attrition"] / denom * 100).round(2)
     grouped = grouped.rename(columns={band_col: "label"})
     grouped["label"] = grouped["label"].astype(str)
     return grouped.to_dict(orient="records")
@@ -47,7 +73,19 @@ def _band_breakdown(band_col):
 def get_kpis():
     """Top-level KPI metrics for the dashboard header cards."""
     if dl.df is None or len(dl.df) == 0:
-        return None
+        return {
+            "has_data": False,
+            "total_employees": 0,
+            "attrition_count": 0,
+            "retention_count": 0,
+            "attrition_rate": 0.0,
+            "avg_age": 0,
+            "avg_monthly_income": 0,
+            "avg_years_at_company": 0,
+            "overtime_attrition_rate": 0.0,
+            "no_overtime_attrition_rate": 0.0,
+            "highest_risk_role": {"role": "N/A", "rate": 0.0, "count": 0, "total": 0},
+        }
 
     avg_age = round(float(dl.df["Age"].mean()), 1) if "Age" in dl.df.columns else 0
     avg_income = round(float(dl.df["MonthlyIncome"].mean()), 0) if "MonthlyIncome" in dl.df.columns else 0
@@ -143,9 +181,12 @@ def get_stock_options_data():
 
 def get_satisfaction_data():
     """Combined job satisfaction and environment satisfaction."""
+    job_sat = _attrition_breakdown("JobSatisfaction", "JobSatisfactionLabel")
+    env_sat = _attrition_breakdown("EnvironmentSatisfaction", "EnvSatisfactionLabel")
     return {
-        "job_satisfaction": _attrition_breakdown("JobSatisfaction", "JobSatisfactionLabel"),
-        "env_satisfaction": _attrition_breakdown("EnvironmentSatisfaction", "EnvSatisfactionLabel"),
+        "job_satisfaction": job_sat,
+        "env_satisfaction": env_sat,
+        "environment_satisfaction": env_sat,
     }
 
 def get_work_life_balance_data():
@@ -169,31 +210,51 @@ def get_contributing_factors():
         if ot_mask.sum() > 0 and (~ot_mask).sum() > 0:
             ot_yes = float(dl.df[ot_mask]["AttritionFlag"].mean() * 100)
             ot_no = float(dl.df[~ot_mask]["AttritionFlag"].mean() * 100)
+            diff = round(ot_yes - ot_no, 1)
             factors.append({
                 "factor": "OverTime",
                 "high_risk_group": "Yes",
+                "high_risk_cohort": "Yes",
                 "high_risk_rate": round(ot_yes, 1),
                 "low_risk_group": "No",
+                "low_risk_cohort": "No",
                 "low_risk_rate": round(ot_no, 1),
-                "impact": round(ot_yes - ot_no, 1),
+                "impact": diff,
+                "impact_pp": diff,
                 "description": f"Employees working overtime leave at {round(ot_yes, 1)}% vs {round(ot_no, 1)}%",
             })
 
-    # Income
+    # Income (adaptive percentiles or <=5k / >15k)
     if "MonthlyIncome" in dl.df.columns and "AttritionFlag" in dl.df.columns:
-        low_inc_mask = dl.df["MonthlyIncome"] <= 5000
-        high_inc_mask = dl.df["MonthlyIncome"] > 15000
+        inc_max = float(dl.df["MonthlyIncome"].max()) if len(dl.df) > 0 else 0
+        if inc_max <= 25000:
+            low_inc_mask = dl.df["MonthlyIncome"] <= 5000
+            high_inc_mask = dl.df["MonthlyIncome"] > 15000
+            low_label = "≤ ₹5,000"
+            high_label = "> ₹15,000"
+        else:
+            q25 = float(dl.df["MonthlyIncome"].quantile(0.25))
+            q75 = float(dl.df["MonthlyIncome"].quantile(0.75))
+            low_inc_mask = dl.df["MonthlyIncome"] <= q25
+            high_inc_mask = dl.df["MonthlyIncome"] >= q75
+            low_label = f"≤ ₹{int(q25):,}"
+            high_label = f"≥ ₹{int(q75):,}"
+
         if low_inc_mask.sum() > 0 and high_inc_mask.sum() > 0:
             low_inc = float(dl.df[low_inc_mask]["AttritionFlag"].mean() * 100)
             high_inc = float(dl.df[high_inc_mask]["AttritionFlag"].mean() * 100)
+            diff = round(low_inc - high_inc, 1)
             factors.append({
                 "factor": "Monthly Income",
-                "high_risk_group": "≤ ₹5,000",
+                "high_risk_group": low_label,
+                "high_risk_cohort": low_label,
                 "high_risk_rate": round(low_inc, 1),
-                "low_risk_group": "> ₹15,000",
+                "low_risk_group": high_label,
+                "low_risk_cohort": high_label,
                 "low_risk_rate": round(high_inc, 1),
-                "impact": round(low_inc - high_inc, 1),
-                "description": f"Low-income employees leave at {round(low_inc, 1)}% vs {round(high_inc, 1)}%",
+                "impact": diff,
+                "impact_pp": diff,
+                "description": f"Low-income cohort leaves at {round(low_inc, 1)}% vs high-income at {round(high_inc, 1)}%",
             })
 
     # Tenure
@@ -203,13 +264,17 @@ def get_contributing_factors():
         if nh_mask.sum() > 0 and vet_mask.sum() > 0:
             new_hire = float(dl.df[nh_mask]["AttritionFlag"].mean() * 100)
             veteran = float(dl.df[vet_mask]["AttritionFlag"].mean() * 100)
+            diff = round(new_hire - veteran, 1)
             factors.append({
                 "factor": "Company Tenure",
                 "high_risk_group": "0-2 years",
+                "high_risk_cohort": "0-2 years",
                 "high_risk_rate": round(new_hire, 1),
                 "low_risk_group": "11+ years",
+                "low_risk_cohort": "11+ years",
                 "low_risk_rate": round(veteran, 1),
-                "impact": round(new_hire - veteran, 1),
+                "impact": diff,
+                "impact_pp": diff,
                 "description": f"New hires (0-2 yrs) leave at {round(new_hire, 1)}% vs veterans at {round(veteran, 1)}%",
             })
 
@@ -220,13 +285,17 @@ def get_contributing_factors():
         if no_s_mask.sum() > 0 and has_s_mask.sum() > 0:
             no_stock = float(dl.df[no_s_mask]["AttritionFlag"].mean() * 100)
             has_stock = float(dl.df[has_s_mask]["AttritionFlag"].mean() * 100)
+            diff = round(no_stock - has_stock, 1)
             factors.append({
                 "factor": "Stock Options",
                 "high_risk_group": "Level 0 (None)",
+                "high_risk_cohort": "Level 0 (None)",
                 "high_risk_rate": round(no_stock, 1),
                 "low_risk_group": "Level 1+",
+                "low_risk_cohort": "Level 1+",
                 "low_risk_rate": round(has_stock, 1),
-                "impact": round(no_stock - has_stock, 1),
+                "impact": diff,
+                "impact_pp": diff,
                 "description": f"No stock options: {round(no_stock, 1)}% vs with options: {round(has_stock, 1)}%",
             })
 
@@ -237,13 +306,17 @@ def get_contributing_factors():
         if l_sat_mask.sum() > 0 and h_sat_mask.sum() > 0:
             low_sat = float(dl.df[l_sat_mask]["AttritionFlag"].mean() * 100)
             high_sat = float(dl.df[h_sat_mask]["AttritionFlag"].mean() * 100)
+            diff = round(low_sat - high_sat, 1)
             factors.append({
                 "factor": "Job Satisfaction",
                 "high_risk_group": "Level 1 (Low)",
+                "high_risk_cohort": "Level 1 (Low)",
                 "high_risk_rate": round(low_sat, 1),
                 "low_risk_group": "Level 4 (Very High)",
+                "low_risk_cohort": "Level 4 (Very High)",
                 "low_risk_rate": round(high_sat, 1),
-                "impact": round(low_sat - high_sat, 1),
+                "impact": diff,
+                "impact_pp": diff,
                 "description": f"Low satisfaction: {round(low_sat, 1)}% vs very high: {round(high_sat, 1)}%",
             })
 
@@ -254,13 +327,17 @@ def get_contributing_factors():
         if l_env_mask.sum() > 0 and h_env_mask.sum() > 0:
             low_env = float(dl.df[l_env_mask]["AttritionFlag"].mean() * 100)
             high_env = float(dl.df[h_env_mask]["AttritionFlag"].mean() * 100)
+            diff = round(low_env - high_env, 1)
             factors.append({
                 "factor": "Environment Satisfaction",
                 "high_risk_group": "Level 1 (Low)",
+                "high_risk_cohort": "Level 1 (Low)",
                 "high_risk_rate": round(low_env, 1),
                 "low_risk_group": "Level 4 (Very High)",
+                "low_risk_cohort": "Level 4 (Very High)",
                 "low_risk_rate": round(high_env, 1),
-                "impact": round(low_env - high_env, 1),
+                "impact": diff,
+                "impact_pp": diff,
                 "description": f"Low env satisfaction: {round(low_env, 1)}% vs very high: {round(high_env, 1)}%",
             })
 
@@ -271,13 +348,17 @@ def get_contributing_factors():
         if y_mask.sum() > 0 and o_mask.sum() > 0:
             young = float(dl.df[y_mask]["AttritionFlag"].mean() * 100)
             older = float(dl.df[o_mask]["AttritionFlag"].mean() * 100)
+            diff = round(young - older, 1)
             factors.append({
                 "factor": "Age Group",
                 "high_risk_group": "18-25",
+                "high_risk_cohort": "18-25",
                 "high_risk_rate": round(young, 1),
                 "low_risk_group": "36-45",
+                "low_risk_cohort": "36-45",
                 "low_risk_rate": round(older, 1),
-                "impact": round(young - older, 1),
+                "impact": diff,
+                "impact_pp": diff,
                 "description": f"Young employees (18-25): {round(young, 1)}% vs mid-career (36-45): {round(older, 1)}%",
             })
 
@@ -288,13 +369,17 @@ def get_contributing_factors():
         if f_mask.sum() > 0 and n_mask.sum() > 0:
             far = float(dl.df[f_mask]["AttritionFlag"].mean() * 100)
             near = float(dl.df[n_mask]["AttritionFlag"].mean() * 100)
+            diff = round(far - near, 1)
             factors.append({
                 "factor": "Distance from Home",
                 "high_risk_group": "16+ miles",
+                "high_risk_cohort": "16+ miles",
                 "high_risk_rate": round(far, 1),
                 "low_risk_group": "0-5 miles",
+                "low_risk_cohort": "0-5 miles",
                 "low_risk_rate": round(near, 1),
-                "impact": round(far - near, 1),
+                "impact": diff,
+                "impact_pp": diff,
                 "description": f"Long commute (16+ mi): {round(far, 1)}% vs nearby (0-5 mi): {round(near, 1)}%",
             })
 
@@ -305,13 +390,17 @@ def get_contributing_factors():
         if l_wlb_mask.sum() > 0 and h_wlb_mask.sum() > 0:
             low_wlb = float(dl.df[l_wlb_mask]["AttritionFlag"].mean() * 100)
             high_wlb = float(dl.df[h_wlb_mask]["AttritionFlag"].mean() * 100)
+            diff = round(low_wlb - high_wlb, 1)
             factors.append({
                 "factor": "Work-Life Balance",
                 "high_risk_group": "Level 1 (Bad)",
+                "high_risk_cohort": "Level 1 (Bad)",
                 "high_risk_rate": round(low_wlb, 1),
                 "low_risk_group": "Level 4 (Best)",
+                "low_risk_cohort": "Level 4 (Best)",
                 "low_risk_rate": round(high_wlb, 1),
-                "impact": round(low_wlb - high_wlb, 1),
+                "impact": diff,
+                "impact_pp": diff,
                 "description": f"Bad balance: {round(low_wlb, 1)}% vs best balance: {round(high_wlb, 1)}%",
             })
 
@@ -325,11 +414,12 @@ def get_contributing_factors():
 # ──────────────────────────────────────────────
 
 def get_high_risk_employees(min_risk_score=3, page=1, per_page=20):
-    """Return employees matching >= min_risk_score criteria."""
+    """Return employees matching >= min_risk_score criteria with resilient string ID support."""
     if dl.df is None or len(dl.df) == 0:
         return {
             "employees": [],
             "total": 0,
+            "total_count": 0,
             "page": page,
             "per_page": per_page,
             "total_pages": 1,
@@ -338,7 +428,11 @@ def get_high_risk_employees(min_risk_score=3, page=1, per_page=20):
     score_col = "RiskScore" if "RiskScore" in dl.df.columns else None
     if score_col:
         high_risk = dl.df[dl.df[score_col] >= min_risk_score].copy()
-        high_risk = high_risk.sort_values(score_col, ascending=False)
+        if len(high_risk) == 0:
+            # Fallback to top-risk employees if none reach the threshold
+            high_risk = dl.df.sort_values(score_col, ascending=False).head(100).copy()
+        else:
+            high_risk = high_risk.sort_values(score_col, ascending=False)
     else:
         high_risk = dl.df.copy()
 
@@ -349,25 +443,52 @@ def get_high_risk_employees(min_risk_score=3, page=1, per_page=20):
 
     employees = []
     for _, row in page_data.iterrows():
+        factors_matched = []
+        if str(row.get("OverTime", "")).lower() in ["yes", "true", "1"]:
+            factors_matched.append("OverTime")
+        if _safe_float(row.get("MonthlyIncome", 0)) < 5000:
+            factors_matched.append("Low Income")
+        if _safe_int(row.get("YearsAtCompany", 0)) <= 2:
+            factors_matched.append("Tenure ≤2 yrs")
+        if _safe_int(row.get("JobSatisfaction", 3)) <= 2:
+            factors_matched.append("Low Job Sat")
+        if _safe_int(row.get("EnvironmentSatisfaction", 3)) <= 2:
+            factors_matched.append("Low Env Sat")
+        if _safe_int(row.get("StockOptionLevel", 0)) == 0:
+            factors_matched.append("Zero Stock")
+        if _safe_int(row.get("Age", 0)) <= 25 and _safe_int(row.get("Age", 0)) > 0:
+            factors_matched.append("Age ≤25")
+        if _safe_int(row.get("WorkLifeBalance", 3)) <= 1:
+            factors_matched.append("Poor WLB")
+
+        emp_id_val = row.get("EmployeeNumber", row.get("EmployeeID", row.get("id", "N/A")))
+        emp_id_str = _safe_str(emp_id_val, "N/A")
+
+        score = _safe_int(row.get("RiskScore", len(factors_matched)), len(factors_matched))
+        risk_lvl = _safe_str(row.get("RiskLevel", "High" if score >= 4 else "Medium" if score >= 2 else "Low"), "Low")
+
         employees.append({
-            "employee_number": int(row.get("EmployeeNumber", 0)),
-            "age": int(row.get("Age", 0)),
-            "department": str(row.get("Department", "General")),
-            "job_role": str(row.get("JobRole", "Employee")),
-            "monthly_income": int(row.get("MonthlyIncome", 0)),
-            "overtime": str(row.get("OverTime", "No")),
-            "years_at_company": int(row.get("YearsAtCompany", 0)),
-            "job_satisfaction": int(row.get("JobSatisfaction", 3)),
-            "env_satisfaction": int(row.get("EnvironmentSatisfaction", 3)),
-            "stock_option_level": int(row.get("StockOptionLevel", 0)),
-            "risk_score": int(row.get("RiskScore", 0)),
-            "risk_level": str(row.get("RiskLevel", "Low")),
-            "attrition": str(row.get("Attrition", "No")),
+            "employee_number": emp_id_str,
+            "age": _safe_int(row.get("Age", 0)),
+            "department": _safe_str(row.get("Department", "General")),
+            "job_role": _safe_str(row.get("JobRole", "Employee")),
+            "monthly_income": _safe_int(row.get("MonthlyIncome", 0)),
+            "overtime": _safe_str(row.get("OverTime", "No")),
+            "years_at_company": _safe_int(row.get("YearsAtCompany", 0)),
+            "job_satisfaction": _safe_int(row.get("JobSatisfaction", 3)),
+            "env_satisfaction": _safe_int(row.get("EnvironmentSatisfaction", 3)),
+            "stock_option_level": _safe_int(row.get("StockOptionLevel", 0)),
+            "risk_score": score,
+            "risk_level": risk_lvl,
+            "attrition": _safe_str(row.get("Attrition", "No")),
+            "matched_factors": factors_matched,
+            "risk_reasons": factors_matched,
         })
 
     return {
         "employees": employees,
         "total": total,
+        "total_count": total,
         "page": page,
         "per_page": per_page,
         "total_pages": max(1, (total + per_page - 1) // per_page),
@@ -430,13 +551,13 @@ def get_filtered_analytics(filters):
     if filters.get("marital_status") and "MaritalStatus" in filtered.columns:
         filtered = filtered[filtered["MaritalStatus"] == filters["marital_status"]]
     if filters.get("age_min") and "Age" in filtered.columns:
-        filtered = filtered[filtered["Age"] >= int(filters["age_min"])]
+        filtered = filtered[filtered["Age"] >= _safe_int(filters["age_min"], 18)]
     if filters.get("age_max") and "Age" in filtered.columns:
-        filtered = filtered[filtered["Age"] <= int(filters["age_max"])]
+        filtered = filtered[filtered["Age"] <= _safe_int(filters["age_max"], 100)]
     if filters.get("income_min") and "MonthlyIncome" in filtered.columns:
-        filtered = filtered[filtered["MonthlyIncome"] >= int(filters["income_min"])]
+        filtered = filtered[filtered["MonthlyIncome"] >= _safe_int(filters["income_min"], 0)]
     if filters.get("income_max") and "MonthlyIncome" in filtered.columns:
-        filtered = filtered[filtered["MonthlyIncome"] <= int(filters["income_max"])]
+        filtered = filtered[filtered["MonthlyIncome"] <= _safe_int(filters["income_max"], 10000000)]
 
     total = len(filtered)
     if total == 0:
@@ -453,7 +574,8 @@ def get_filtered_analytics(filters):
             attrition=("AttritionFlag", "sum"),
         ).reset_index()
         g["retention"] = g["total"] - g["attrition"]
-        g["rate"] = (g["attrition"] / g["total"] * 100).round(2)
+        denom = g["total"].replace(0, 1)
+        g["rate"] = (g["attrition"] / denom * 100).round(2)
         g = g.rename(columns={col: "label"})
         g["label"] = g["label"].astype(str)
         return g.to_dict(orient="records")

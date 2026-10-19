@@ -54,13 +54,19 @@ export default function ChartsGrid({ chartsData = {} }) {
     worklife = [],
   } = chartsData;
 
+  // Dynamic color palettes for arbitrary dataset categories
+  const deptPalette = [
+    '#10b981', '#059669', '#34d399', '#6ee7b7', '#047857', '#0f766e', '#14b8a6', '#2dd4bf', '#0284c7', '#6366f1'
+  ];
+  const travelPalette = ['#ef4444', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6'];
+
   // 1. Department Doughnut Chart
   const deptChartData = {
     labels: department.map((d) => d.label),
     datasets: [
       {
-        data: department.map((d) => d.attrition),
-        backgroundColor: ['#10b981', '#059669', '#34d399'],
+        data: department.map((d) => d.attrition ?? d.total ?? 0),
+        backgroundColor: department.map((_, i) => deptPalette[i % deptPalette.length]),
         borderColor: '#ffffff',
         borderWidth: 2,
         hoverOffset: 6,
@@ -69,13 +75,13 @@ export default function ChartsGrid({ chartsData = {} }) {
   };
 
   // 2. Job Role Horizontal Bar Chart
-  const sortedRoles = [...jobRole].sort((a, b) => b.rate - a.rate);
+  const sortedRoles = [...jobRole].sort((a, b) => (b.rate || 0) - (a.rate || 0));
   const roleChartData = {
     labels: sortedRoles.map((d) => d.label),
     datasets: [
       {
         label: 'Attrition Rate (%)',
-        data: sortedRoles.map((d) => d.rate),
+        data: sortedRoles.map((d) => d.rate || 0),
         backgroundColor: sortedRoles.map((d) =>
           d.rate > 25 ? 'rgba(239, 68, 68, 0.85)' : d.rate > 15 ? 'rgba(245, 158, 11, 0.85)' : 'rgba(16, 185, 129, 0.85)'
         ),
@@ -93,7 +99,7 @@ export default function ChartsGrid({ chartsData = {} }) {
       {
         type: 'bar',
         label: 'Attrition Count',
-        data: age.map((d) => d.attrition),
+        data: age.map((d) => d.attrition || 0),
         backgroundColor: 'rgba(239, 68, 68, 0.8)',
         borderRadius: 4,
         yAxisID: 'y',
@@ -101,7 +107,7 @@ export default function ChartsGrid({ chartsData = {} }) {
       {
         type: 'line',
         label: 'Attrition Rate (%)',
-        data: age.map((d) => d.rate),
+        data: age.map((d) => d.rate || 0),
         borderColor: '#059669',
         backgroundColor: '#059669',
         borderWidth: 2.5,
@@ -117,13 +123,13 @@ export default function ChartsGrid({ chartsData = {} }) {
     datasets: [
       {
         label: 'Retained',
-        data: income.map((d) => d.retention),
+        data: income.map((d) => d.retention || 0),
         backgroundColor: 'rgba(16, 185, 129, 0.75)',
         borderRadius: 4,
       },
       {
         label: 'Departed',
-        data: income.map((d) => d.attrition),
+        data: income.map((d) => d.attrition || 0),
         backgroundColor: 'rgba(239, 68, 68, 0.85)',
         borderRadius: 4,
       },
@@ -132,11 +138,15 @@ export default function ChartsGrid({ chartsData = {} }) {
 
   // 5. Top Contributing Risk Drivers
   const factorsChartData = {
-    labels: factors.map((d) => `${d.factor} (${d.high_risk_cohort} vs ${d.low_risk_cohort})`),
+    labels: factors.map((d) => {
+      const high = d.high_risk_cohort || d.high_risk_group || '';
+      const low = d.low_risk_cohort || d.low_risk_group || '';
+      return high && low ? `${d.factor} (${high} vs ${low})` : d.factor;
+    }),
     datasets: [
       {
         label: 'Attrition Delta (+pp)',
-        data: factors.map((d) => d.impact_pp),
+        data: factors.map((d) => d.impact_pp ?? d.impact ?? 0),
         backgroundColor: factors.map((_, i) => (i === 0 ? 'rgba(239, 68, 68, 0.9)' : 'rgba(16, 185, 129, 0.85)')),
         borderColor: factors.map((_, i) => (i === 0 ? '#ef4444' : '#059669')),
         borderWidth: 1,
@@ -151,7 +161,7 @@ export default function ChartsGrid({ chartsData = {} }) {
     datasets: [
       {
         label: 'Attrition Rate (%)',
-        data: overtime.map((d) => d.rate),
+        data: overtime.map((d) => d.rate || 0),
         backgroundColor: overtime.map((d) => (d.label === 'Yes' ? 'rgba(239, 68, 68, 0.85)' : 'rgba(16, 185, 129, 0.85)')),
         borderColor: overtime.map((d) => (d.label === 'Yes' ? '#ef4444' : '#10b981')),
         borderWidth: 1,
@@ -166,7 +176,7 @@ export default function ChartsGrid({ chartsData = {} }) {
     datasets: [
       {
         label: 'Attrition Rate (%)',
-        data: tenure.map((d) => d.rate),
+        data: tenure.map((d) => d.rate || 0),
         backgroundColor: 'rgba(5, 150, 105, 0.8)',
         borderColor: '#059669',
         borderWidth: 1,
@@ -176,20 +186,21 @@ export default function ChartsGrid({ chartsData = {} }) {
   };
 
   // 8. Job & Environment Satisfaction Matrix
-  const jobSat = satisfaction.job_satisfaction || [];
-  const envSat = satisfaction.environment_satisfaction || [];
+  const jobSat = (satisfaction && satisfaction.job_satisfaction) || [];
+  const envSat = (satisfaction && (satisfaction.env_satisfaction || satisfaction.environment_satisfaction)) || [];
+  const satLabels = jobSat.length > 0 ? jobSat.map(d => `Level ${d.label}`) : ['Level 1 (Low)', 'Level 2 (Medium)', 'Level 3 (High)', 'Level 4 (Very High)'];
   const satisfactionChartData = {
-    labels: ['Level 1 (Low)', 'Level 2 (Medium)', 'Level 3 (High)', 'Level 4 (Very High)'],
+    labels: satLabels,
     datasets: [
       {
         label: 'Job Satisfaction Rate (%)',
-        data: jobSat.map((d) => d.rate),
+        data: jobSat.map((d) => d.rate || 0),
         backgroundColor: 'rgba(16, 185, 129, 0.85)',
         borderRadius: 4,
       },
       {
         label: 'Env Satisfaction Rate (%)',
-        data: envSat.map((d) => d.rate),
+        data: envSat.map((d) => d.rate || 0),
         backgroundColor: 'rgba(52, 211, 153, 0.85)',
         borderRadius: 4,
       },
@@ -198,11 +209,11 @@ export default function ChartsGrid({ chartsData = {} }) {
 
   // 9. Business Travel Frequency
   const travelChartData = {
-    labels: travel.map((d) => d.label.replace('_', ' ')),
+    labels: travel.map((d) => String(d?.label || '').replace(/_/g, ' ')),
     datasets: [
       {
-        data: travel.map((d) => d.attrition),
-        backgroundColor: ['#ef4444', '#f59e0b', '#10b981'],
+        data: travel.map((d) => d.attrition ?? d.total ?? 0),
+        backgroundColor: travel.map((_, i) => travelPalette[i % travelPalette.length]),
         borderColor: '#ffffff',
         borderWidth: 2,
       },
@@ -215,20 +226,21 @@ export default function ChartsGrid({ chartsData = {} }) {
     datasets: [
       {
         label: 'Attrition Rate (%)',
-        data: stock.map((d) => d.rate),
-        backgroundColor: stock.map((d) => (d.label === '0' ? 'rgba(239, 68, 68, 0.85)' : 'rgba(16, 185, 129, 0.85)')),
+        data: stock.map((d) => d.rate || 0),
+        backgroundColor: stock.map((d) => (String(d.label) === '0' ? 'rgba(239, 68, 68, 0.85)' : 'rgba(16, 185, 129, 0.85)')),
         borderRadius: 4,
       },
     ],
   };
 
   // 11. Work-Life Balance Rating
+  const wlbLabels = worklife.length > 0 ? worklife.map(d => `Level ${d.label}`) : ['1 (Bad)', '2 (Good)', '3 (Better)', '4 (Best)'];
   const worklifeChartData = {
-    labels: ['1 (Bad)', '2 (Good)', '3 (Better)', '4 (Best)'],
+    labels: wlbLabels,
     datasets: [
       {
         label: 'Attrition Rate (%)',
-        data: worklife.map((d) => d.rate),
+        data: worklife.map((d) => d.rate || 0),
         backgroundColor: 'rgba(16, 185, 129, 0.8)',
         borderRadius: 4,
       },

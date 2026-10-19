@@ -101,11 +101,27 @@ def _normalize_and_preprocess(raw_df, dataset_name="WA_Fn-UseC_-HR-Employee-Attr
     elif "MonthlyIncome" not in clean_df.columns:
         clean_df["MonthlyIncome"] = 6500.0
 
-    clean_df["IncomeBand"] = pd.cut(
-        clean_df["MonthlyIncome"],
-        bins=[-1, 5000, 10000, 15000, 1000000],
-        labels=["1k-5k", "5k-10k", "10k-15k", "15k+"],
-    )
+    max_inc = float(clean_df["MonthlyIncome"].max()) if len(clean_df) > 0 else 0
+    if max_inc <= 25000:
+        clean_df["IncomeBand"] = pd.cut(
+            clean_df["MonthlyIncome"],
+            bins=[-1, 5000, 10000, 15000, 100000000],
+            labels=["1k-5k", "5k-10k", "10k-15k", "15k+"],
+        )
+    else:
+        try:
+            clean_df["IncomeBand"] = pd.qcut(
+                clean_df["MonthlyIncome"],
+                q=4,
+                labels=["Tier 1 (Lowest)", "Tier 2 (Mid-Low)", "Tier 3 (Mid-High)", "Tier 4 (Highest)"],
+                duplicates="drop",
+            )
+        except Exception:
+            clean_df["IncomeBand"] = pd.cut(
+                clean_df["MonthlyIncome"],
+                bins=4,
+                labels=["Tier 1", "Tier 2", "Tier 3", "Tier 4"],
+            )
 
     # 7. Tenure (YearsAtCompany) detection & Banding
     tenure_col = _find_column_by_aliases(cols, ["yearsatcompany", "tenure", "years_at_company", "experience", "company_tenure"])
@@ -179,10 +195,12 @@ def _normalize_and_preprocess(raw_df, dataset_name="WA_Fn-UseC_-HR-Employee-Attr
 
     # 13. Employee Identifier
     id_col = _find_column_by_aliases(cols, ["employeenumber", "employeeid", "id", "emp_id", "emp_number"])
-    if id_col and id_col != "EmployeeNumber":
+    if id_col:
         clean_df["EmployeeNumber"] = clean_df[id_col].astype(str)
     elif "EmployeeNumber" not in clean_df.columns:
-        clean_df["EmployeeNumber"] = np.arange(1001, 1001 + len(clean_df))
+        clean_df["EmployeeNumber"] = np.arange(1001, 1001 + len(clean_df)).astype(str)
+    else:
+        clean_df["EmployeeNumber"] = clean_df["EmployeeNumber"].astype(str)
 
     # 14. Dynamic Risk Score calculation
     ot_score = (clean_df["OverTime"] == "Yes").astype(int) if "OverTime" in clean_df.columns else 0
