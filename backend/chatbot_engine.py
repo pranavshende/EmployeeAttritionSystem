@@ -877,21 +877,21 @@ def process_message(user_message):
     # ── Check for Individual Employee Inquiry ─────────────
     emp_id = _extract_employee_id(user_message)
     if emp_id:
-        if dl.df is None or len(dl.df) == 0:
-            return {
-                "intent": "employee_lookup",
-                "response": (
-                    "⚠️ **No employee dataset is currently loaded.**\n\n"
-                    "Please upload an employee CSV file on the dashboard first so I can retrieve specific employee profiles and flight-risk assessments."
-                ),
-                "suggestions": [
-                    "How does attrition analysis work?",
-                    "What columns should my CSV include?",
-                ],
-                "source": "rule_based_fallback",
-            }
-
         emp = ae.get_employee_by_id(emp_id)
+        if not emp:
+            if dl.df is None or len(dl.df) == 0:
+                return {
+                    "intent": "employee_lookup",
+                    "response": (
+                        "⚠️ **No employee dataset is currently loaded.**\n\n"
+                        "Please upload an employee CSV file on the dashboard first so I can save the records to Supabase and retrieve profiles."
+                    ),
+                    "suggestions": [
+                        "How does attrition analysis work?",
+                        "What columns should my CSV include?",
+                    ],
+                    "source": "rule_based_fallback",
+                }
         if not emp:
             samples = ae.get_sample_employee_ids(limit=4)
             sample_str = ""

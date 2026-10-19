@@ -683,32 +683,41 @@ def get_employee_by_id(emp_id):
     """
     Look up a specific employee in the active dataset by ID or number.
     Checks EmployeeNumber, EmployeeID, and common identifier columns.
+    Falls back to querying the Supabase PostgreSQL database via Prisma if not in memory.
     """
-    if dl.df is None or len(dl.df) == 0:
-        return None
-
     target = str(emp_id).strip().lower().lstrip("#")
     if not target:
         return None
 
-    id_candidates = ["EmployeeNumber", "EmployeeID", "id", "emp_id", "emp_number"]
-    cols_to_check = [c for c in id_candidates if c in dl.df.columns]
-    
-    for col in cols_to_check:
-        matches = dl.df[dl.df[col].astype(str).str.strip().str.lower() == target]
-        if len(matches) > 0:
-            return _format_employee_record(matches.iloc[0])
-
-    if target.isdigit():
-        target_int = int(target)
+    # 1. In-memory cohort lookup
+    if dl.df is not None and len(dl.df) > 0:
+        id_candidates = ["EmployeeNumber", "EmployeeID", "id", "emp_id", "emp_number"]
+        cols_to_check = [c for c in id_candidates if c in dl.df.columns]
+        
         for col in cols_to_check:
-            try:
-                numeric_series = pd.to_numeric(dl.df[col], errors="coerce")
-                matches = dl.df[numeric_series == target_int]
-                if len(matches) > 0:
-                    return _format_employee_record(matches.iloc[0])
-            except Exception:
-                pass
+            matches = dl.df[dl.df[col].astype(str).str.strip().str.lower() == target]
+            if len(matches) > 0:
+                return _format_employee_record(matches.iloc[0])
+
+        if target.isdigit():
+            target_int = int(target)
+            for col in cols_to_check:
+                try:
+                    numeric_series = pd.to_numeric(dl.df[col], errors="coerce")
+                    matches = dl.df[numeric_series == target_int]
+                    if len(matches) > 0:
+                        return _format_employee_record(matches.iloc[0])
+                except Exception:
+                    pass
+
+    # 2. Database Scan: Query Supabase PostgreSQL via Prisma
+    try:
+        from . import db
+        emp_from_db = db.find_employee_in_db(emp_id)
+        if emp_from_db:
+            return emp_from_db
+    except Exception:
+        pass
 
     return None
 

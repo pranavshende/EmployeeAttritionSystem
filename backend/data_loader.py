@@ -292,6 +292,21 @@ def load_custom_csv(file_stream_or_path, filename):
 
     clean_df = _normalize_and_preprocess(raw_df, dataset_name=filename, is_custom=True)
     _update_state(clean_df, filename, is_custom=True)
+
+    # Persist dataset and employee records to Supabase PostgreSQL database via Prisma
+    try:
+        from . import db
+        db.save_dataset_in_background(
+            clean_df,
+            filename,
+            TOTAL_EMPLOYEES,
+            ATTRITION_COUNT,
+            RETENTION_COUNT,
+            ATTRITION_RATE,
+        )
+    except Exception as e:
+        logger.warning(f"Could not queue Prisma database save: {e}")
+
     return clean_df
 
 
