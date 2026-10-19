@@ -1,0 +1,44 @@
+# Environment variables and secrets
+.env
+*.env
+backend/.env
+backend/*.env
+frontend/.env
+frontend/*.env
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node & Frontend dependencies
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend-vanilla/dist/
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Scratch and temporary test files
+scratch/
+*.tmp
+*.temp
+data/uploads/*
+!data/uploads/.gitkeep
+
+# IDEs & System files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

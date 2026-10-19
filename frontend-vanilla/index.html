@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Employee Attrition Analysis Dashboard | HR Predictive Intelligence</title>
+  <meta name="description" content="Modern HR Analytics Dashboard providing real-time employee attrition rates, demographic trends, predictive risk intelligence, and Gemini-powered conversational AI." />
+  
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- ── Dashboard Header ────────────────────────── -->
+    <header class="dashboard-header">
+      <div class="header-left">
+        <div class="header-logo">
+          <i data-lucide="activity" style="color: #ffffff;"></i>
+        </div>
+        <div>
+          <h1 class="header-title">Employee Attrition Intelligence</h1>
+          <p class="header-subtitle">Workforce Diagnostics, Retention Insights & Gemini AI Copilot</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="header-badge">
+          <span class="dot"></span>
+          <span>1,470 Records Active</span>
+        </div>
+        <div class="header-badge" style="background: rgba(0, 212, 255, 0.1); border-color: rgba(0, 212, 255, 0.2); color: var(--accent-cyan);">
+          <i data-lucide="sparkles" style="width: 12px; height: 12px; margin-right: 4px;"></i>
+          <span>Gemini AI Connected</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── Filter Bar ──────────────────────────────── -->
+    <section class="filter-bar" aria-label="Dashboard Filters">
+      <div class="filter-label">
+        <i data-lucide="sliders-horizontal" style="width: 14px; height: 14px;"></i>
+        <span>Filters</span>
+      </div>
+
+      <div class="filter-group">
+        <select id="filterDept" class="filter-select" aria-label="Filter by Department">
+          <option value="">All Departments</option>
+          <option value="Sales">Sales</option>
+          <option value="Research & Development">Research & Development</option>
+          <option value="Human Resources">Human Resources</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <select id="filterOvertime" class="filter-select" aria-label="Filter by OverTime">
+          <option value="">All OverTime</option>
+          <option value="Yes">OverTime: Yes</option>
+          <option value="No">OverTime: No</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <select id="filterRole" class="filter-select" aria-label="Filter by Job Role">
+          <option value="">All Job Roles</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <select id="filterAge" class="filter-select" aria-label="Filter by Age Band">
+          <option value="">All Age Bands</option>
+          <option value="18-25">18 - 25</option>
+          <option value="26-35">26 - 35</option>
+          <option value="36-45">36 - 45</option>
+          <option value="46-55">46 - 55</option>
+          <option value="56+">56+</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <select id="filterGender" class="filter-select" aria-label="Filter by Gender">
+          <option value="">All Genders</option>
+          <option value="Male">Male</option>
+          <option value="Female">Female</option>
+        </select>
+      </div>
+
+      <button id="btnResetFilters" class="btn-reset" title="Clear all active filters">
+        <i data-lucide="rotate-ccw" style="width: 12px; height: 12px; display: inline-block; vertical-align: middle; margin-right: 4px;"></i>
+        Reset
+      </button>
+    </section>
+
+    <!-- Active Filters Tags Container -->
+    <div id="activeFilterTags" class="active-filters"></div>
+
+    <!-- ── KPI Cards Grid ─────────────────────────── -->
+    <section class="kpi-grid" aria-label="Workforce Key Performance Indicators">
+      <!-- Total Employees -->
+      <div class="kpi-card accent-cyan">
+        <div class="kpi-header">
+          <span class="kpi-label">Total Workforce</span>
+          <div class="kpi-icon cyan"><i data-lucide="users"></i></div>
+        </div>
+        <div class="kpi-value" id="kpiTotalEmployees">1,470</div>
+        <div class="kpi-detail">
+          <span>Active Dataset Baseline</span>
+        </div>
+      </div>
+
+      <!-- Overall Attrition Rate -->
+      <div class="kpi-card accent-danger">
+        <div class="kpi-header">
+          <span class="kpi-label">Attrition Rate</span>
+          <div class="kpi-icon danger"><i data-lucide="user-minus"></i></div>
+        </div>
+        <div class="kpi-value" id="kpiAttritionRate">16.1%</div>
+        <div class="kpi-detail">
+          <span class="highlight" id="kpiAttritionCount">237</span> employees departed
+        </div>
+      </div>
+
+      <!-- Retention Count -->
+      <div class="kpi-card accent-success">
+        <div class="kpi-header">
+          <span class="kpi-label">Retained Talent</span>
+          <div class="kpi-icon success"><i data-lucide="user-check"></i></div>
+        </div>
+        <div class="kpi-value" id="kpiRetentionCount">1,233</div>
+        <div class="kpi-detail">
+          <span class="highlight-success" id="kpiRetentionRate">83.9%</span> overall stability
+        </div>
+      </div>
+
+      <!-- Avg Monthly Income -->
+      <div class="kpi-card accent-purple">
+        <div class="kpi-header">
+          <span class="kpi-label">Avg Monthly Salary</span>
+          <div class="kpi-icon purple"><i data-lucide="wallet"></i></div>
+        </div>
+        <div class="kpi-value" id="kpiAvgIncome">₹6,503</div>
+        <div class="kpi-detail">
+          <span>Median: ₹4,919 / mo</span>
+        </div>
+      </div>
+
+      <!-- OverTime Attrition Rate -->
+      <div class="kpi-card accent-danger">
+        <div class="kpi-header">
+          <span class="kpi-label">OverTime Flight Risk</span>
+          <div class="kpi-icon danger"><i data-lucide="clock"></i></div>
+        </div>
+        <div class="kpi-value" id="kpiOvertimeRate">30.5%</div>
+        <div class="kpi-detail">
+          <span class="highlight">3.0x higher</span> vs non-OT (10.4%)
+        </div>
+      </div>
+
+      <!-- Highest Flight-Risk Role -->
+      <div class="kpi-card accent-warning">
+        <div class="kpi-header">
+          <span class="kpi-label">Highest Risk Role</span>
+          <div class="kpi-icon warning"><i data-lucide="alert-triangle"></i></div>
+        </div>
+        <div class="kpi-value" id="kpiTopRiskRole" style="font-size: 1.4rem;">Sales Rep</div>
+        <div class="kpi-detail">
+          <span class="highlight" id="kpiTopRiskRoleRate">39.8%</span> attrition (33/83)
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Section 1: Overview & Demographics ─────── -->
+    <div class="section-header">
+      <span class="section-icon">📊</span>
+      <h2>Attrition Overview & Departmental Diagnostics</h2>
+      <div class="section-line"></div>
+    </div>
+
+    <section class="charts-grid">
+      <!-- Department Attrition -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Department Attrition Breakdown</h3>
+          <span class="chart-badge info">By Headcount</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="deptChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Job Role Attrition Rate -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Job Role Flight Risk (% Left)</h3>
+          <span class="chart-badge danger">Ranked Highest to Lowest</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="roleChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Age Distribution vs Attrition -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Age Band Demographics & Flight Risk</h3>
+          <span class="chart-badge warning">18-25 Highest: 35.8%</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="ageChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Income Bands -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Monthly Income Band Distribution</h3>
+          <span class="chart-badge info">Compensation Impact</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="incomeChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Section 2: Key Risk Drivers ────────────── -->
+    <div class="section-header">
+      <span class="section-icon">🔥</span>
+      <h2>Key Risk Factors & Root-Cause Analytics</h2>
+      <div class="section-line"></div>
+    </div>
+
+    <section class="charts-grid">
+      <!-- Top Contributing Factors (Full Width) -->
+      <div class="chart-card full-width">
+        <div class="chart-header">
+          <div>
+            <h3 class="chart-title">Top Contributing Risk Drivers (Attrition Delta Impact)</h3>
+            <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;">
+              Percentage point difference in attrition between high-risk and low-risk cohorts
+            </p>
+          </div>
+          <span class="chart-badge danger">Critical Levers</span>
+        </div>
+        <div class="chart-container" style="height: 280px;">
+          <canvas id="factorsChart"></canvas>
+        </div>
+      </div>
+
+      <!-- OverTime Comparison -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">OverTime vs Attrition Impact</h3>
+          <span class="chart-badge danger">+20.1pp Gap</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="overtimeChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Tenure Band Breakdown -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Tenure & Early Career Flight Risk</h3>
+          <span class="chart-badge warning">0-2 Years Critical</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="tenureChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Job & Environment Satisfaction -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Job & Environment Satisfaction</h3>
+          <span class="chart-badge info">Morale Matrix (1-4)</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="satisfactionChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Business Travel -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Business Travel Frequency Impact</h3>
+          <span class="chart-badge warning">Travel Fatigue</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="travelChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Stock Options -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Stock Option Level Retention Power</h3>
+          <span class="chart-badge success">Equity Golden Handcuffs</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="stockChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Work Life Balance -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Work-Life Balance Rating Impact</h3>
+          <span class="chart-badge info">Scale 1 (Bad) to 4 (Best)</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="worklifeChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Section 3: High-Risk Employees Watchlist ─ -->
+    <div class="section-header">
+      <span class="section-icon">⚠️</span>
+      <h2>High-Risk Employee Watchlist & Early Warning</h2>
+      <div class="section-line"></div>
+    </div>
+
+    <section class="table-card" aria-label="High-Risk Employee Watchlist">
+      <div class="chart-header" style="flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
+        <div>
+          <h3 class="chart-title">Employees with Cumulative Flight Risk (Score &ge; 4 / 8)</h3>
+          <p id="highRiskCountText" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;">
+            Loading prioritized watchlist...
+          </p>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input 
+            type="text" 
+            id="tableSearch" 
+            placeholder="Search role, dept, ID..." 
+            style="background: var(--bg-input); border: 1px solid var(--border-glass); border-radius: var(--radius-sm); padding: 6px 12px; color: var(--text-primary); font-size: 0.8rem; outline: none;"
+          />
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="data-table" id="highRiskTable">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Age</th>
+              <th>Department</th>
+              <th>Job Role</th>
+              <th>Monthly Income</th>
+              <th>OverTime</th>
+              <th>Tenure</th>
+              <th>Flight Risk Factors</th>
+              <th>Risk Score</th>
+              <th>Attrition Status</th>
+            </tr>
+          </thead>
+          <tbody id="highRiskTableBody">
+            <tr>
+              <td colspan="10" class="text-center" style="padding: 30px; color: var(--text-muted);">
+                Loading high-risk employee profiles...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-pagination">
+        <div class="pagination-info" id="paginationInfo">Showing 0 of 0</div>
+        <div class="pagination-controls" id="paginationControls"></div>
+      </div>
+    </section>
+
+  </div><!-- /.app-container -->
+
+  <!-- ── Floating Chatbot Button & Drawer ───────── -->
+  <button class="chatbot-fab" id="chatbotFab" title="Open AttritionAI Copilot" aria-label="Open AI Chatbot">
+    <i data-lucide="bot" style="color: #ffffff; width: 26px; height: 26px;"></i>
+  </button>
+
+  <aside class="chatbot-panel" id="chatbotPanel" aria-label="AttritionAI Copilot" role="dialog">
+    <!-- Header -->
+    <div class="chat-header">
+      <div class="chat-avatar">
+        <i data-lucide="bot" style="color: #ffffff; width: 20px; height: 20px;"></i>
+      </div>
+      <div class="chat-header-info">
+        <div class="chat-header-name">AttritionAI</div>
+        <div class="chat-header-status">
+          <span class="dot"></span>
+          <span>Online • Gemini 2.5 Flash & Analytics</span>
+        </div>
+      </div>
+      <button class="chat-close" id="chatCloseBtn" title="Close AI Assistant" aria-label="Close Chat">
+        <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+      </button>
+    </div>
+
+    <!-- Messages Container -->
+    <div class="chat-messages" id="chatMessages">
+      <div class="chat-message bot">
+        <div class="chat-message-avatar">
+          <i data-lucide="bot" style="width: 16px; height: 16px; color: #fff;"></i>
+        </div>
+        <div>
+          <div class="chat-bubble">
+            👋 <strong>Welcome to AttritionAI!</strong><br />
+            I'm your workforce intelligence copilot powered by our <strong>1,470 employee dataset</strong> and <strong>Google Gemini</strong>.<br /><br />
+            Ask me specific workforce attrition questions or chat with me about anything!
+          </div>
+          <div class="chat-time">Just now</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Suggestions Container -->
+    <div style="padding: 0 var(--space-md) var(--space-xs);">
+      <div class="chat-suggestions" id="chatSuggestions">
+        <button class="suggestion-btn" data-query="Who is likely to leave?">Who is likely to leave?</button>
+        <button class="suggestion-btn" data-query="Why do employees leave?">Why do employees leave?</button>
+        <button class="suggestion-btn" data-query="Which department has highest attrition?">Which department?</button>
+        <button class="suggestion-btn" data-query="Overtime impact">Overtime impact</button>
+        <button class="suggestion-btn" data-query="What recommendations do you have?">Recommendations</button>
+        <button class="suggestion-btn" data-query="Tell me a joke about work">Tell me a joke</button>
+      </div>
+    </div>
+
+    <!-- Chat Input -->
+    <div class="chat-input-area">
+      <input 
+        type="text" 
+        class="chat-input" 
+        id="chatInput" 
+        placeholder="Ask a question or chat freely..." 
+        aria-label="Type your message"
+      />
+      <button class="chat-send" id="chatSendBtn" title="Send message" aria-label="Send Message">
+        <i data-lucide="send" style="width: 16px; height: 16px;"></i>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Application Logic Scripts -->
+  <script src="js/api.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script src="js/filters.js"></script>
+  <script src="js/chatbot.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
