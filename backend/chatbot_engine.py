@@ -209,6 +209,12 @@ def _call_gemini_api(user_message, custom_context=None):
                     parts = candidates[0].get("content", {}).get("parts", [])
                     if parts and "text" in parts[0]:
                         return parts[0]["text"].strip()
+        except urllib.error.HTTPError as e:
+            logger.warning(f"Gemini call to {model} failed: {e}")
+            if e.code == 429:
+                # API rate limit reached, break early to provide instant rule-based fallback
+                break
+            continue
         except Exception as e:
             logger.warning(f"Gemini call to {model} failed: {e}")
             continue
@@ -216,36 +222,85 @@ def _call_gemini_api(user_message, custom_context=None):
     return None
 
 
+_EMP_ID_FALSE_POSITIVES = {
+    "rate", "rates", "turnover", "attrition", "count", "score",
+    "list", "table", "details", "info", "overview", "kpi", "kpis",
+    "summary", "analysis", "data", "dataset", "status", "who", "why",
+    "how", "what", "which", "where", "when", "is", "are", "tell", "show",
+    "about", "me", "the", "an", "a", "this", "that", "give", "please", "can",
+    "you", "do", "i", "we", "he", "she", "they", "them", "him", "her",
+    "leave", "stay", "leaving", "risk", "high", "low", "medium", "profile",
+    "card", "report", "stats", "view", "find", "check"
+}
+
+
 def _extract_employee_id(text):
     """
     Extract an employee ID/number from user query text.
     Handles:
-      - 'Tell me about employee 101'
-      - 'Give details on employee ID 105'
-      - 'emp #12'
-      - 'who is employee 45'
-      - 'employee #104'
-      - 'is emp 103 going to leave?'
+      - 'tell me about #E02744'
+      - '#E02744' or 'E02744'
+      - 'tell me about employee 101'
+      - 'give details on employee ID 105'
+      - 'who is employee E00005'
+      - 'is emp #12 leaving?'
+      - 'tell me about 104'
     """
     if not text:
         return None
-    patterns = [
+
+    cleaned_text = text.strip()
+
+    # 1. Direct hashtag match: #E02744, #104, #EMP-01
+    m = re.search(r"#([a-zA-Z0-9_\-]+)", cleaned_text)
+    if m:
+        val = m.group(1).strip()
+        if val.lower() not in _EMP_ID_FALSE_POSITIVES:
+            return val
+
+    # 2. Keywords followed by ID: employee [id] [:] #?E02744 / 104
+    m = re.search(
         r"(?:employee|emp|worker|staff|user|id|record)\s*(?:id|number|no|#|\:)?\s*#?([a-zA-Z0-9_\-]+)",
-        r"#([0-9]+)",
-        r"\bemp\s*#?([a-zA-Z0-9_\-]+)",
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            val = m.group(1).strip()
-            # Ignore false-positive words
-            if val.lower() not in {
-                "rate", "rates", "turnover", "attrition", "count", "score",
-                "list", "table", "details", "info", "overview", "kpi", "kpis",
-                "summary", "analysis", "data", "dataset", "status", "who", "why",
-                "how", "what", "which", "where", "when", "is", "are", "tell", "show"
-            }:
-                return val
+        cleaned_text,
+        re.IGNORECASE,
+    )
+    if m:
+        val = m.group(1).strip()
+        if val.lower() not in _EMP_ID_FALSE_POSITIVES:
+            return val
+
+    # 3. Alphanumeric employee ID code pattern: E02744, EMP102, EMP-01
+    m = re.search(r"\b([A-Za-z]{1,4}[-_]?[0-9]{2,8})\b", cleaned_text)
+    if m:
+        val = m.group(1).strip()
+        if val.lower() not in _EMP_ID_FALSE_POSITIVES:
+            return val
+
+    # 4. Contextual lookup verbs: 'tell me about 104', 'details for E001', 'who is 42'
+    m = re.search(
+        r"(?:about|for|on|who\s+is|look\s*up|check|find|status\s+of)\s+#?([a-zA-Z0-9_\-]+)",
+        cleaned_text,
+        re.IGNORECASE,
+    )
+    if m:
+        val = m.group(1).strip()
+        if val.lower() not in _EMP_ID_FALSE_POSITIVES:
+            return val
+
+    # 5. Direct token verification against active dataset ID columns
+    if dl.df is not None and len(dl.df) > 0:
+        id_candidates = ["EmployeeNumber", "EmployeeID", "id", "emp_id", "emp_number"]
+        cols = [c for c in id_candidates if c in dl.df.columns]
+        if cols:
+            tokens = re.findall(r"#?([a-zA-Z0-9_\-]+)", cleaned_text)
+            for token in tokens:
+                clean_tok = token.lstrip("#").strip().lower()
+                if len(clean_tok) < 2 or clean_tok in _EMP_ID_FALSE_POSITIVES:
+                    continue
+                for c in cols:
+                    if (dl.df[c].astype(str).str.strip().str.lower() == clean_tok).any():
+                        return token.lstrip("#").strip()
+
     return None
 
 
