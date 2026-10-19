@@ -42,12 +42,18 @@ export async function fetchFiltered(params = {}) {
   return await res.json();
 }
 
-export async function sendChatMessage(message) {
+export async function sendChatMessage(message, sessionId = 'default') {
   const res = await fetch(`${API_BASE_URL}/api/chatbot/message`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, session_id: sessionId }),
   });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+export async function fetchChatbotSuggestions() {
+  const res = await fetch(`${API_BASE_URL}/api/chatbot/suggestions`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }

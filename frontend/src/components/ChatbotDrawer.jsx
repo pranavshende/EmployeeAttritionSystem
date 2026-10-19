@@ -1,21 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, X, User } from 'lucide-react';
-import { sendChatMessage } from '../api';
+import { Bot, Send, X, RefreshCw } from 'lucide-react';
+import { sendChatMessage, fetchChatbotSuggestions } from '../api';
 
 const NO_DATASET_SUGGESTIONS = [
-  'How does attrition analysis work?',
-  'What are top causes of employee turnover?',
-  'How should I format my CSV file?',
-  'Tell me a witty joke about work',
-];
-
-const ACTIVE_DATASET_SUGGESTIONS = [
-  'Tell me about employee #101',
-  'Who is likely to leave?',
-  'Why do employees leave?',
-  'Which department has highest attrition?',
-  'Overtime impact',
-  'What recommendations do you have?',
+  'How does employee attrition analysis work?',
+  'What CSV columns should my dataset include?',
+  'How do I upload an employee dataset?',
+  'What are top indicators of employee turnover?',
 ];
 
 export default function ChatbotDrawer({ datasetInfo = {} }) {
@@ -24,18 +15,23 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
   const [inputMessage, setInputMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [suggestions, setSuggestions] = useState(
-    hasDataset ? ACTIVE_DATASET_SUGGESTIONS : NO_DATASET_SUGGESTIONS
+    datasetInfo.suggested_questions && datasetInfo.suggested_questions.length > 0
+      ? datasetInfo.suggested_questions
+      : NO_DATASET_SUGGESTIONS
   );
 
+  // Unique session ID for persistent conversational context
+  const sessionIdRef = useRef('session_' + Math.random().toString(36).substring(2, 9));
+
   const initialBotText = hasDataset
-    ? `👋 **Welcome to AttritionAI!**\n\nI'm currently analyzing **\`${datasetInfo.dataset_name || 'Active Dataset'}\`** (${(datasetInfo.total_employees || 0).toLocaleString()} records, ${datasetInfo.attrition_rate}% attrition).\n\nAsk me about any specific employee (e.g. *\"Tell me about employee #101\"*), department turnover, flight risks, or retention recommendations!`
-    : "👋 **Welcome to AttritionAI!**\n\nI'm your workforce intelligence copilot powered by **Google Gemini**.\n\nNo CSV dataset is loaded yet. Upload your employee CSV file on the dashboard to generate instant metrics, or chat freely about general HR and workforce strategy!";
+    ? `👋 **Welcome to AttritionAI!**\n\nI am dynamically analyzing **\`${datasetInfo.dataset_name || 'Active Dataset'}\`** (${(datasetInfo.total_employees || 0).toLocaleString()} records, ${datasetInfo.attrition_rate}% attrition).\n\nAsk about individual employees (e.g. *\"Tell me about employee #{id}\"*), department deep dives, comparisons, flight risks, or retention recommendations!`
+    : "👋 **Welcome to AttritionAI!**\n\nI'm your workforce analytics intelligence assistant.\n\nNo CSV dataset is loaded yet. Upload your employee CSV file on the dashboard to generate instant metrics, or ask how attrition analysis works!";
 
   const [messages, setMessages] = useState([
     {
       id: 1,
       sender: 'bot',
-      source: 'Gemini AI',
+      source: 'Workforce Copilot',
       time: 'Just now',
       text: initialBotText,
     },
@@ -43,37 +39,55 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
 
   const prevDatasetRef = useRef(datasetInfo.dataset_name);
 
-  // Update suggestions and messages when dataset changes
+  // Load dynamic dataset-tailored questions when dataset changes
   useEffect(() => {
-    if (datasetInfo.has_dataset && datasetInfo.dataset_name && prevDatasetRef.current !== datasetInfo.dataset_name) {
-      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      setSuggestions(ACTIVE_DATASET_SUGGESTIONS);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          sender: 'bot',
-          source: 'Dataset Loaded',
-          time,
-          text: `📁 **Dataset Loaded!**\n\nNow analyzing **\`${datasetInfo.dataset_name}\`** (${(datasetInfo.total_employees || 0).toLocaleString()} records, ${datasetInfo.attrition_rate}% flight risk).\n\nAsk me anything about this cohort!`,
-        },
-      ]);
-    } else if (!datasetInfo.has_dataset && prevDatasetRef.current) {
-      setSuggestions(NO_DATASET_SUGGESTIONS);
-      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          sender: 'bot',
-          source: 'System',
-          time,
-          text: '🔄 **Dataset cleared.** Waiting for a new CSV upload to resume cohort analysis.',
-        },
-      ]);
-    }
-    prevDatasetRef.current = datasetInfo.dataset_name;
-  }, [datasetInfo.has_dataset, datasetInfo.dataset_name, datasetInfo.total_employees, datasetInfo.attrition_rate]);
+    const updateDynamicSuggestions = async () => {
+      if (datasetInfo.has_dataset && datasetInfo.dataset_name) {
+        if (datasetInfo.suggested_questions && datasetInfo.suggested_questions.length > 0) {
+          setSuggestions(datasetInfo.suggested_questions);
+        } else {
+          try {
+            const data = await fetchChatbotSuggestions();
+            if (data.suggestions && data.suggestions.length > 0) {
+              setSuggestions(data.suggestions);
+            }
+          } catch (e) {
+            console.warn('Failed to load dynamic suggestions:', e);
+          }
+        }
+
+        if (prevDatasetRef.current !== datasetInfo.dataset_name) {
+          const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: Date.now(),
+              sender: 'bot',
+              source: 'Dataset Ingested',
+              time,
+              text: `📁 **Dataset Activated!**\n\nNow analyzing **\`${datasetInfo.dataset_name}\`** (${(datasetInfo.total_employees || 0).toLocaleString()} records, ${datasetInfo.attrition_rate}% attrition).\n\nDynamic questions for this specific cohort are ready below!`,
+            },
+          ]);
+        }
+      } else if (!datasetInfo.has_dataset && prevDatasetRef.current) {
+        setSuggestions(NO_DATASET_SUGGESTIONS);
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            sender: 'bot',
+            source: 'System',
+            time,
+            text: '🔄 **Dataset cleared.** Waiting for a new CSV upload to resume cohort analysis.',
+          },
+        ]);
+      }
+      prevDatasetRef.current = datasetInfo.dataset_name;
+    };
+
+    updateDynamicSuggestions();
+  }, [datasetInfo.has_dataset, datasetInfo.dataset_name, datasetInfo.total_employees, datasetInfo.attrition_rate, datasetInfo.suggested_questions]);
 
   const messagesEndRef = useRef(null);
 
@@ -105,10 +119,10 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
     setIsSending(true);
 
     try {
-      // 2. Call backend
-      const res = await sendChatMessage(text);
+      // 2. Call backend with persistent session ID
+      const res = await sendChatMessage(text, sessionIdRef.current);
       const botTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const source = res.source === 'gemini_ai' ? 'Gemini AI' : 'HR Analytics';
+      const source = res.source === 'gemini_ai' ? 'Gemini AI' : 'HR Analytics Engine';
 
       // 3. Add bot message
       setMessages((prev) => [
@@ -122,7 +136,7 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
         },
       ]);
 
-      // 4. Update suggestions if provided
+      // 4. Update suggestions if provided by backend
       if (res.suggestions && res.suggestions.length > 0) {
         setSuggestions(res.suggestions);
       }
@@ -143,16 +157,66 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
     }
   };
 
-  // Safe markdown converter for bold, italics, bullets, newlines
+  // Safe markdown converter with table, bold, italics, bullets, newlines
   const renderFormattedText = (rawText) => {
     if (!rawText) return null;
 
-    // Split paragraphs
+    // Split paragraphs by double newline
     const paragraphs = rawText.split('\n\n');
 
     return paragraphs.map((para, pIdx) => {
       const lines = para.split('\n');
-      const isBulletList = lines.every((line) => line.trim().startsWith('*') || line.trim().startsWith('•') || line.trim().startsWith('-'));
+
+      // Check if this paragraph is a Markdown Table
+      const isTable =
+        lines.length >= 2 &&
+        lines[0].trim().startsWith('|') &&
+        lines[1].includes('---');
+
+      if (isTable) {
+        const headerCells = lines[0]
+          .split('|')
+          .map((c) => c.trim())
+          .filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
+
+        const dataRows = lines
+          .slice(2)
+          .filter((l) => l.trim().startsWith('|'))
+          .map((l) =>
+            l
+              .split('|')
+              .map((c) => c.trim())
+              .filter((_, idx, arr) => idx > 0 && idx < arr.length - 1)
+          );
+
+        return (
+          <div key={pIdx} className="chat-table-wrapper">
+            <table className="chat-table">
+              <thead>
+                <tr>
+                  {headerCells.map((h, hIdx) => (
+                    <th key={hIdx} dangerouslySetInnerHTML={{ __html: formatInline(h) }} />
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {dataRows.map((row, rIdx) => (
+                  <tr key={rIdx}>
+                    {row.map((cell, cIdx) => (
+                      <td key={cIdx} dangerouslySetInnerHTML={{ __html: formatInline(cell) }} />
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      }
+
+      // Check if bullet list
+      const isBulletList = lines.every(
+        (line) => line.trim().startsWith('*') || line.trim().startsWith('•') || line.trim().startsWith('-')
+      );
 
       if (isBulletList) {
         return (
@@ -184,7 +248,8 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.*?)\*/g, '<em>$1</em>');
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code class="chat-code">$1</code>');
   };
 
   return (
@@ -212,7 +277,7 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
                 <div className="drawer-bot-title">AttritionAI</div>
                 <div className="drawer-bot-status">
                   <span className="white-dot"></span>
-                  <span>Online • Gemini 2.5 Flash</span>
+                  <span>{hasDataset ? `Online • ${datasetInfo.dataset_name || 'Active Cohort'}` : 'Online • Ready for CSV'}</span>
                 </div>
               </div>
             </div>
@@ -256,14 +321,15 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Suggestions Chips */}
+          {/* Dynamic Suggestions Chips (Derived only from active dataset) */}
           <div className="chat-chips">
-            {suggestions.map((s) => (
+            {suggestions.map((s, idx) => (
               <button
-                key={s}
+                key={`${s}-${idx}`}
                 className="chip-btn"
                 onClick={() => handleSend(s)}
                 disabled={isSending}
+                title={s}
               >
                 {s}
               </button>
@@ -275,7 +341,7 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
             <input
               type="text"
               className="chat-text-input"
-              placeholder="Ask anything or chat freely..."
+              placeholder={hasDataset ? "Ask about employees, depts, risk factors..." : "Ask how attrition analysis works..."}
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               onKeyDown={(e) => {

@@ -3,6 +3,7 @@ import json
 import urllib.request
 import logging
 import re
+import pandas as pd
 
 from . import data_loader as dl
 from . import analytics_engine as ae
@@ -10,15 +11,17 @@ from . import analytics_engine as ae
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────────────────────────────────────────────────
+#  API Key & LLM Configuration
+# ─────────────────────────────────────────────────────────────
+
 def _load_gemini_api_key():
     """Load Gemini API Key from environment or .env file."""
-    # 1. Environment variables
     for var in ["GEMINI_API_KEY", "API_KEY", "API Key"]:
         val = os.environ.get(var)
         if val:
             return val.strip()
 
-    # 2. Check .env file in backend/
     base_dir = os.path.dirname(os.path.abspath(__file__))
     env_path = os.path.join(base_dir, ".env")
     if os.path.exists(env_path):
@@ -40,7 +43,6 @@ def _load_gemini_api_key():
     return None
 
 
-# Load API key immediately on startup
 _GEMINI_API_KEY = _load_gemini_api_key()
 
 
@@ -51,6 +53,123 @@ def _get_gemini_api_key():
     return _GEMINI_API_KEY
 
 
+# ─────────────────────────────────────────────────────────────
+#  Conversational Context Session Store
+# ─────────────────────────────────────────────────────────────
+
+_sessions = {}
+
+
+def get_session(session_id="default"):
+    """Get or create a conversational context session dictionary."""
+    if session_id not in _sessions:
+        _sessions[session_id] = {
+            "last_employee_id": None,
+            "last_employee": None,
+            "last_department": None,
+            "last_role": None,
+            "last_intent": None,
+            "history": [],
+        }
+    return _sessions[session_id]
+
+
+def clear_sessions():
+    """Reset all conversational sessions (e.g. when dataset is reset)."""
+    global _sessions
+    _sessions.clear()
+
+
+# ─────────────────────────────────────────────────────────────
+#  Dynamic Pregenerated Questions (Derived from Uploaded Data)
+# ─────────────────────────────────────────────────────────────
+
+def generate_dataset_questions():
+    """
+    Generate dynamic suggested questions derived STRICTLY from the active dataset.
+    Never hardcodes fixed IDs or departments; dynamically inspects dl.df.
+    Returns 6 tailored, high-value prompt suggestions.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return [
+            "How does employee attrition analysis work?",
+            "What CSV columns should my dataset include?",
+            "How do I upload an employee dataset?",
+            "What are top indicators of employee turnover?",
+        ]
+
+    questions = []
+
+    # 1. Real Sample Employee Lookup (Prefer high flight risk active employee)
+    id_col = "EmployeeNumber" if "EmployeeNumber" in dl.df.columns else "EmployeeID" if "EmployeeID" in dl.df.columns else None
+    sample_emp_id = None
+    sample_role = None
+
+    if id_col:
+        # Prefer active employee with High risk
+        high_risk_active = dl.df[(dl.df.get("AttritionFlag", 0) == 0) & (dl.df.get("RiskLevel", "") == "High")]
+        if len(high_risk_active) > 0:
+            row = high_risk_active.iloc[0]
+            sample_emp_id = str(row[id_col])
+            sample_role = str(row.get("JobRole", "Employee"))
+        else:
+            active = dl.df[dl.df.get("AttritionFlag", 0) == 0]
+            if len(active) > 0:
+                row = active.iloc[0]
+                sample_emp_id = str(row[id_col])
+                sample_role = str(row.get("JobRole", "Employee"))
+            elif len(dl.df) > 0:
+                row = dl.df.iloc[0]
+                sample_emp_id = str(row[id_col])
+                sample_role = str(row.get("JobRole", "Employee"))
+
+    if sample_emp_id:
+        if sample_role:
+            questions.append(f"Tell me about employee #{sample_emp_id} ({sample_role})")
+        else:
+            questions.append(f"Tell me about employee #{sample_emp_id}")
+
+    # 2. Department Deep Dive (Highest attrition department)
+    depts = []
+    if "Department" in dl.df.columns and "AttritionFlag" in dl.df.columns:
+        dept_grp = dl.df.groupby("Department")["AttritionFlag"].agg(["count", "sum"])
+        if len(dept_grp) > 0:
+            dept_grp["rate"] = (dept_grp["sum"] / dept_grp["count"] * 100).round(1)
+            dept_sorted = dept_grp.sort_values("rate", ascending=False)
+            highest_dept = dept_sorted.index[0]
+            highest_rate = dept_sorted.iloc[0]["rate"]
+            depts = list(dept_sorted.index)
+            questions.append(f"Why is {highest_dept} attrition at {highest_rate}%?")
+
+    # 3. Department Comparison (Between top 2 departments if available)
+    if len(depts) >= 2:
+        questions.append(f"Compare {depts[0]} vs {depts[1]}")
+    elif len(depts) == 1:
+        questions.append(f"Analyze {depts[0]} department")
+
+    # 4. Top Risk Factor Analysis
+    try:
+        factors = ae.get_contributing_factors()
+        if factors and len(factors) > 0:
+            top_factor = factors[0]["factor"]
+            questions.append(f"How does {top_factor} impact turnover?")
+        else:
+            questions.append("What are the top contributing factors to attrition?")
+    except Exception:
+        questions.append("What are the top contributing factors to attrition?")
+
+    # 5. Rankings
+    questions.append("Rank all departments by attrition rate")
+
+    # 6. Active High-Risk Watchlist / Retention Recommendations
+    questions.append("Who are the top high-risk active employees?")
+
+    return questions
+
+
+# ─────────────────────────────────────────────────────────────
+#  Dynamic Gemini Grounding & Prompt Builder
+# ─────────────────────────────────────────────────────────────
 
 def _build_dynamic_system_instruction():
     """Build dynamic Gemini system instructions incorporating whatever dataset is currently active."""
@@ -112,10 +231,11 @@ def _build_dynamic_system_instruction():
         f"- Highest flight-risk job role: {role_str}.\n"
         f"- Top flight-risk drivers: {factors_str}.\n"
         f"{ai_section}\n"
-        f"Instructions:\n"
+        f"CRITICAL GROUND RULES:\n"
         f"1. When answering workforce or employee attrition questions, ALWAYS ground your answers in the numbers of this active dataset ('{dataset_name}'). Quote specific figures and percentages!\n"
-        f"2. For casual greetings, random questions, chit-chat, jokes, or hypothetical scenarios, reply warmly, engagingly, and concisely.\n"
-        f"3. Format your responses in clean GitHub Markdown with clear bullet points and emojis."
+        f"2. Clearly distinguish between HISTORICAL ATTRITION (employees who already left) and FUTURE FLIGHT RISK (currently active employees showing high predictive flight-risk indicators).\n"
+        f"3. Never invent fictitious employees, predictions, or metrics.\n"
+        f"4. Format your responses in clean GitHub Markdown with structured tables, clear bullet points, and emojis."
     )
 
 
@@ -180,7 +300,6 @@ def _call_gemini_api(user_message, custom_context=None):
     if not api_key:
         return None
 
-    # Dynamic system instruction giving context of the currently active dataset
     system_instruction = _build_dynamic_system_instruction()
     if custom_context:
         system_instruction = f"{system_instruction}\n\n{custom_context}"
@@ -212,7 +331,6 @@ def _call_gemini_api(user_message, custom_context=None):
         except urllib.error.HTTPError as e:
             logger.warning(f"Gemini call to {model} failed: {e}")
             if e.code == 429:
-                # API rate limit reached, break early to provide instant rule-based fallback
                 break
             continue
         except Exception as e:
@@ -221,6 +339,10 @@ def _call_gemini_api(user_message, custom_context=None):
 
     return None
 
+
+# ─────────────────────────────────────────────────────────────
+#  Entity Extractors (Alphanumeric IDs, Departments, Roles)
+# ─────────────────────────────────────────────────────────────
 
 _EMP_ID_FALSE_POSITIVES = {
     "rate", "rates", "turnover", "attrition", "count", "score",
@@ -238,13 +360,11 @@ def _extract_employee_id(text):
     """
     Extract an employee ID/number from user query text.
     Handles:
-      - 'tell me about #E02744'
-      - '#E02744' or 'E02744'
-      - 'tell me about employee 101'
-      - 'give details on employee ID 105'
-      - 'who is employee E00005'
-      - 'is emp #12 leaving?'
-      - 'tell me about 104'
+      - '#E02744', '#104', '#EMP-01'
+      - 'employee E02744', 'emp #101', 'id 105'
+      - Alphanumeric codes: 'E02744', 'EMP102'
+      - Contextual verbs: 'tell me about 104', 'details for E001'
+      - Direct token verification against active dataset ID columns
     """
     if not text:
         return None
@@ -255,18 +375,18 @@ def _extract_employee_id(text):
     m = re.search(r"#([a-zA-Z0-9_\-]+)", cleaned_text)
     if m:
         val = m.group(1).strip()
-        if val.lower() not in _EMP_ID_FALSE_POSITIVES:
+        if val.lower() not in _EMP_ID_FALSE_POSITIVES and (any(c.isdigit() for c in val) or len(val) >= 3):
             return val
 
     # 2. Keywords followed by ID: employee [id] [:] #?E02744 / 104
     m = re.search(
-        r"(?:employee|emp|worker|staff|user|id|record)\s*(?:id|number|no|#|\:)?\s*#?([a-zA-Z0-9_\-]+)",
+        r"\b(?:employee|emp|worker|staff|user|record)\s+(?:id|number|no|#|\:)?\s*#?([a-zA-Z0-9_\-]+)\b",
         cleaned_text,
         re.IGNORECASE,
     )
     if m:
         val = m.group(1).strip()
-        if val.lower() not in _EMP_ID_FALSE_POSITIVES:
+        if val.lower() not in _EMP_ID_FALSE_POSITIVES and (any(c.isdigit() for c in val) or len(val) >= 3):
             return val
 
     # 3. Alphanumeric employee ID code pattern: E02744, EMP102, EMP-01
@@ -276,15 +396,15 @@ def _extract_employee_id(text):
         if val.lower() not in _EMP_ID_FALSE_POSITIVES:
             return val
 
-    # 4. Contextual lookup verbs: 'tell me about 104', 'details for E001', 'who is 42'
+    # 4. Contextual lookup verbs: 'tell me about 104', 'details for E001'
     m = re.search(
-        r"(?:about|for|on|who\s+is|look\s*up|check|find|status\s+of)\s+#?([a-zA-Z0-9_\-]+)",
+        r"\b(?:about|details\s+for|details\s+on|who\s+is|look\s*up|status\s+of)\s+#?([a-zA-Z0-9_\-]+)\b",
         cleaned_text,
         re.IGNORECASE,
     )
     if m:
         val = m.group(1).strip()
-        if val.lower() not in _EMP_ID_FALSE_POSITIVES:
+        if val.lower() not in _EMP_ID_FALSE_POSITIVES and any(c.isdigit() for c in val):
             return val
 
     # 5. Direct token verification against active dataset ID columns
@@ -292,7 +412,7 @@ def _extract_employee_id(text):
         id_candidates = ["EmployeeNumber", "EmployeeID", "id", "emp_id", "emp_number"]
         cols = [c for c in id_candidates if c in dl.df.columns]
         if cols:
-            tokens = re.findall(r"#?([a-zA-Z0-9_\-]+)", cleaned_text)
+            tokens = re.findall(r"\b#?([a-zA-Z0-9_\-]+)\b", cleaned_text)
             for token in tokens:
                 clean_tok = token.lstrip("#").strip().lower()
                 if len(clean_tok) < 2 or clean_tok in _EMP_ID_FALSE_POSITIVES:
@@ -304,8 +424,114 @@ def _extract_employee_id(text):
     return None
 
 
+def _get_active_departments():
+    """Return a list of unique department names present in the active dataset."""
+    if dl.df is None or len(dl.df) == 0 or "Department" not in dl.df.columns:
+        return []
+    return [str(d).strip() for d in dl.df["Department"].dropna().unique() if str(d).strip()]
+
+
+def _extract_department(text):
+    """
+    Dynamically detect department name mentioned in user text.
+    Matches aliases (e.g. 'r&d' -> 'Research & Development', 'hr' -> 'Human Resources')
+    and any custom department name present in the loaded dataset.
+    """
+    if not text or dl.df is None or "Department" not in dl.df.columns:
+        return None
+
+    cleaned = text.lower()
+    depts = _get_active_departments()
+    if not depts:
+        return None
+
+    # Common aliases
+    alias_map = {
+        "r&d": "Research & Development",
+        "r & d": "Research & Development",
+        "research & development": "Research & Development",
+        "research and development": "Research & Development",
+        "hr": "Human Resources",
+        "human resources": "Human Resources",
+        "human resource": "Human Resources",
+        "sales": "Sales",
+        "engineering": "Engineering",
+        "operations": "Operations",
+        "marketing": "Marketing",
+        "finance": "Finance",
+        "customer support": "Customer Support",
+        "support": "Customer Support",
+    }
+
+    # 1. Alias check
+    for alias, standard in alias_map.items():
+        if re.search(r"\b" + re.escape(alias) + r"\b", cleaned):
+            for d in depts:
+                if d.lower() == standard.lower():
+                    return d
+
+    # 2. Direct match against active dataset departments (longest first)
+    for d in sorted(depts, key=len, reverse=True):
+        if re.search(r"\b" + re.escape(d.lower()) + r"\b", cleaned):
+            return d
+
+    return None
+
+
+def _extract_departments_to_compare(text):
+    """Extract two departments to compare from user text, or return top 2 departments."""
+    depts = _get_active_departments()
+    if len(depts) < 2:
+        return depts
+
+    found = []
+    cleaned = text.lower()
+
+    alias_map = {
+        "r&d": "Research & Development",
+        "research & development": "Research & Development",
+        "research and development": "Research & Development",
+        "hr": "Human Resources",
+        "human resources": "Human Resources",
+        "sales": "Sales",
+        "engineering": "Engineering",
+        "operations": "Operations",
+        "marketing": "Marketing",
+        "finance": "Finance",
+        "customer support": "Customer Support",
+    }
+
+    for alias, standard in alias_map.items():
+        if re.search(r"\b" + re.escape(alias) + r"\b", cleaned):
+            for d in depts:
+                if d.lower() == standard.lower() and d not in found:
+                    found.append(d)
+
+    for d in sorted(depts, key=len, reverse=True):
+        if re.search(r"\b" + re.escape(d.lower()) + r"\b", cleaned) and d not in found:
+            found.append(d)
+
+    if len(found) >= 2:
+        return found[:2]
+
+    # If general comparison, sort departments by size and pick top 2
+    if dl.df is not None and "Department" in dl.df.columns:
+        counts = dl.df["Department"].value_counts()
+        top_depts = list(counts.index[:2])
+        return top_depts
+
+    return depts[:2]
+
+
+# ─────────────────────────────────────────────────────────────
+#  Modular Intent Handlers & Formatted Responses
+# ─────────────────────────────────────────────────────────────
+
 def _format_employee_card(emp):
-    """Format a detailed, visually clear markdown profile card for an individual employee."""
+    """
+    Format a detailed, visually clear markdown profile card for an individual employee.
+    Explicitly distinguishes historical attrition (departed) from future flight risk (active).
+    """
     emp_no = emp["employee_number"]
     role = emp["job_role"]
     dept = emp["department"]
@@ -329,8 +555,41 @@ def _format_employee_card(emp):
     attrition = emp["attrition"]
     reasons = emp.get("risk_reasons", [])
 
-    status_badge = "🔴 **Left Company (Attrition)**" if attrition == "Yes" else "🟢 **Active Employee (Retained)**"
-    risk_badge = f"🔥 **{risk_lvl} Risk ({risk_score}/8)**" if risk_lvl == "High" else f"⚡ **{risk_lvl} Risk ({risk_score}/8)**"
+    is_departed = (attrition == "Yes" or emp.get("attrition_flag") is True)
+
+    if is_departed:
+        status_badge = "🔴 **Left Company (Historical Attrition)**"
+        risk_badge = f"📉 **Historical Exit Profile (Score: {risk_score}/8)**"
+        status_note = "⚠️ *This employee has already departed the organization. Their profile reflects historical exit record data.*"
+        rec_str = (
+            "📋 **Historical Exit Review Summary**:\n"
+            "This employee departed prior to retention intervention. "
+            f"Primary exit signals on file: {', '.join(reasons) if reasons else 'Standard turnover indicators'}. "
+            f"Use these insights to address similar flight risks currently active in the {dept} department."
+        )
+    else:
+        status_badge = "🟢 **Active Employee (Retained)**"
+        risk_badge = f"🔥 **{risk_lvl} Flight Risk ({risk_score}/8)**" if risk_lvl == "High" else f"⚡ **{risk_lvl} Flight Risk ({risk_score}/8)**"
+        status_note = "✅ *This employee is currently active. Early retention intervention can mitigate flight risk.*"
+        if risk_lvl == "High":
+            rec_str = (
+                f"💡 **Recommended Retention Intervention (High Flight Risk)**:\n"
+                f"• Schedule an urgent 1-on-1 check-in within 5 business days.\n"
+                f"• Priority Action: Review {reasons[0].lower() if reasons else 'workload and compensation'}.\n"
+                f"• Explore equity participation (Stock Level currently {stock}) or flexible working arrangements."
+            )
+        elif risk_lvl == "Medium":
+            rec_str = (
+                f"💡 **Recommended Retention Intervention (Moderate Risk)**:\n"
+                f"• Conduct quarterly engagement review.\n"
+                f"• Monitor overtime hours (currently {ot}) and check job satisfaction."
+            )
+        else:
+            rec_str = (
+                "💡 **Recommended Retention Intervention (Low Risk)**:\n"
+                "• Profile reflects healthy retention signals.\n"
+                "• Maintain standard career development pathways and recognition."
+            )
 
     salary_str = f"₹{salary:,.0f}/month" if salary else "Not specified"
 
@@ -339,18 +598,10 @@ def _format_employee_card(emp):
     else:
         reasons_str = "  • ✅ No major flight risk triggers detected (Stable profile)"
 
-    if attrition == "Yes":
-        rec_str = "📋 **Exit Review Summary**: Employee has departed. Historical drivers reflect flight risk patterns common in this role and tenure band."
-    elif risk_lvl == "High":
-        rec_str = f"💡 **Recommended Retention Intervention**: High flight risk! Recommend immediate 1-on-1 check-in. Focus on {reasons[0].lower() if reasons else 'workload balance'} and compensation/equity review."
-    elif risk_lvl == "Medium":
-        rec_str = "💡 **Recommended Retention Intervention**: Moderate risk. Monitor workload balance and conduct regular engagement check-ins."
-    else:
-        rec_str = "💡 **Recommended Retention Intervention**: Healthy retention signals. Continue standard career milestones and recognition."
-
     return (
         f"👤 **Employee Profile: #{emp_no}**\n\n"
         f"**Status:** {status_badge} &nbsp;|&nbsp; **Flight Risk:** {risk_badge}\n\n"
+        f"{status_note}\n\n"
         f"📌 **Role & Demographics:**\n"
         f"  • **Role:** {role} ({dept})\n"
         f"  • **Demographics:** {age} yrs old • {gender} • {marital}\n\n"
@@ -364,197 +615,329 @@ def _format_employee_card(emp):
         f"  • **Environment Satisfaction:** Level {env_sat}/4 ({env_sat_lbl})\n"
         f"  • **Work-Life Balance:** Level {wlb}/4 ({wlb_lbl})\n"
         f"  • **Commute & Travel:** {commute} miles away • {travel}\n\n"
-        f"🔍 **Flight Risk Diagnostics:**\n"
+        f"🔍 **Flight Risk Diagnostics ({risk_score}/8 Criteria):**\n"
         f"{reasons_str}\n\n"
         f"{rec_str}"
     )
 
 
-def _match_intent(message):
-    """Match user message to an intent using keyword priority scoring."""
-    emp_id = _extract_employee_id(message)
-    if emp_id:
-        return "employee_lookup"
+def _department_deep_dive_response(dept_name):
+    """
+    Generate complete, robust department analysis from active dataset.
+    Calculates headcount, departed, attrition rate, income, overtime, satisfaction,
+    and role breakdown for the specified department.
+    """
+    if dl.df is None or len(dl.df) == 0 or "Department" not in dl.df.columns:
+        return {
+            "response": "⚠️ No dataset is currently loaded to perform department analysis.",
+            "suggestions": ["How do I upload a CSV?"],
+        }
 
-    msg = message.lower().strip()
+    dept_df = dl.df[dl.df["Department"].astype(str).str.lower() == dept_name.lower()]
+    if len(dept_df) == 0:
+        depts = _get_active_departments()
+        dept_list = ", ".join([f"`{d}`" for d in depts])
+        return {
+            "response": f"🔍 Department `{dept_name}` was not found in the active dataset.\n\nAvailable departments: {dept_list}.",
+            "suggestions": [f"Analyze {d}" for d in depts[:3]],
+        }
 
-    # Intent definitions: (intent_name, keywords, priority)
-    intents = [
-        ("greeting", ["hi", "hello", "hey", "good morning", "good afternoon"], 1),
-        ("help", ["help", "what can you", "what do you", "commands", "options", "menu"], 2),
-        ("who_likely_leave", ["who will leave", "who is likely", "who might leave",
-                              "likely to leave", "at risk", "high risk employee",
-                              "who is at risk", "risky", "going to leave"], 10),
-        ("why_leave", ["why leave", "why do they leave", "reasons for leaving",
-                       "causes", "why employees leave", "contributing factors",
-                       "root cause", "why attrition"], 9),
-        ("recommendations", ["recommend", "suggestion", "what should", "how to reduce",
-                              "how to improve", "how can we", "action", "strategy",
-                              "prevent", "retain", "what to do"], 9),
-        ("department_attrition", ["department", "which department", "dept",
-                                   "sales department", "r&d", "human resources dept",
-                                   "highest attrition department"], 7),
-        ("role_attrition", ["role", "job role", "position", "sales rep",
-                            "which role", "job position", "designation"], 7),
-        ("overtime_impact", ["overtime", "over time", "working hours",
-                              "extra hours", "overwork"], 7),
-        ("salary_impact", ["salary", "income", "pay", "compensation",
-                           "money", "earning", "wage"], 7),
-        ("age_impact", ["age", "young", "old", "generation", "millennial",
-                        "age group", "how old"], 6),
-        ("tenure_impact", ["tenure", "how long", "years at company",
-                           "new hire", "experience", "seniority", "service"], 6),
-        ("satisfaction_impact", ["satisfaction", "happy", "unhappy",
-                                  "satisfied", "dissatisfied", "engagement"], 7),
-        ("gender_analysis", ["gender", "male", "female", "men", "women",
-                              "sex", "diversity"], 6),
-        ("travel_impact", ["travel", "business travel", "commute", "trip"], 6),
-        ("overall_stats", ["overall", "summary", "total", "how many",
-                           "attrition rate", "overview", "statistics",
-                           "numbers", "data", "count"], 5),
+    total_dept = len(dept_df)
+    departed = int(dept_df["AttritionFlag"].sum()) if "AttritionFlag" in dept_df.columns else 0
+    active = total_dept - departed
+    dept_rate = round(departed / total_dept * 100, 1) if total_dept > 0 else 0.0
+
+    overall_rate = dl.ATTRITION_RATE
+    diff_pp = round(dept_rate - overall_rate, 1)
+    diff_badge = f"+{diff_pp}pp higher than company average" if diff_pp > 0 else f"{abs(diff_pp)}pp lower than company average"
+
+    # Compensation & workload
+    avg_salary = round(float(dept_df["MonthlyIncome"].mean()), 0) if "MonthlyIncome" in dept_df.columns else 0
+    ot_rate = round(float(dept_df["OvertimeFlag"].mean() * 100), 1) if "OvertimeFlag" in dept_df.columns else 0
+    avg_job_sat = round(float(dept_df["JobSatisfaction"].mean()), 2) if "JobSatisfaction" in dept_df.columns else 0
+    avg_wlb = round(float(dept_df["WorkLifeBalance"].mean()), 2) if "WorkLifeBalance" in dept_df.columns else 0
+
+    # Role breakdown within department
+    role_rows = []
+    if "JobRole" in dept_df.columns and "AttritionFlag" in dept_df.columns:
+        role_grp = dept_df.groupby("JobRole")["AttritionFlag"].agg(["count", "sum"])
+        role_grp["rate"] = (role_grp["sum"] / role_grp["count"] * 100).round(1)
+        role_sorted = role_grp.sort_values("rate", ascending=False)
+        for role_name, r in role_sorted.iterrows():
+            role_rows.append(f"| {role_name} | {r['count']} | {r['sum']} | **{r['rate']}%** |")
+
+    role_table = ""
+    if role_rows:
+        role_table = (
+            "\n\n**Job Role Breakdown within " + dept_name + ":**\n\n"
+            "| Job Role | Total | Departed | Attrition Rate |\n"
+            "| :--- | :---: | :---: | :---: |\n"
+            + "\n".join(role_rows)
+        )
+
+    # Tailored Department Action Plan
+    if dept_rate > overall_rate:
+        action_plan = (
+            f"💡 **Targeted Retention Plan for {dept_name}**:\n"
+            f"• **Priority Level:** 🔴 High Attention ({diff_badge}).\n"
+            f"• **Workload:** {ot_rate}% of {dept_name} employees work overtime. Institute strict caps on consecutive overtime shifts.\n"
+            f"• **Compensation:** Benchmark average monthly salary (₹{avg_salary:,.0f}) against company median to ensure competitive compensation.\n"
+            f"• **Engagement:** Focus retention interviews on high-attrition roles in this department."
+        )
+    else:
+        action_plan = (
+            f"💡 **Targeted Retention Plan for {dept_name}**:\n"
+            f"• **Priority Level:** 🟢 Healthy Retention ({diff_badge}).\n"
+            f"• **Best Practices:** Document effective team norms and manager practices from {dept_name} to replicate across higher-risk departments."
+        )
+
+    response_text = (
+        f"🏢 **Complete Department Deep Dive: {dept_name}**\n\n"
+        f"• **Total Headcount:** **{total_dept:,}** employees ({active:,} active, {departed:,} departed)\n"
+        f"• **Department Attrition Rate:** **{dept_rate}%** ({diff_badge})\n"
+        f"• **Average Monthly Income:** **₹{avg_salary:,.0f}**\n"
+        f"• **OverTime Rate:** **{ot_rate}%** working overtime hours\n"
+        f"• **Average Job Satisfaction:** **{avg_job_sat} / 4.0**\n"
+        f"• **Average Work-Life Balance:** **{avg_wlb} / 4.0**"
+        f"{role_table}\n\n"
+        f"{action_plan}"
+    )
+
+    other_depts = [d for d in _get_active_departments() if d.lower() != dept_name.lower()]
+    suggestions = [
+        f"Compare {dept_name} vs {other_depts[0]}" if other_depts else "Rank all departments",
+        "Who is likely to leave?",
+        "What recommendations do you have?",
     ]
 
-    best_intent = None
-    best_score = 0
-
-    for intent_name, keywords, priority in intents:
-        score = 0
-        for keyword in keywords:
-            if keyword in msg:
-                # Longer keyword matches get higher scores
-                score += len(keyword) * priority
-        if score > best_score:
-            best_score = score
-            best_intent = intent_name
-
-    return best_intent or "unknown"
-
-
-def _format_response(intent):
-    """Generate a formatted response for the matched intent."""
-    kpis = ae.get_kpis()
-
-    if dl.df is None or dl.TOTAL_EMPLOYEES == 0 or kpis is None:
-        if intent == "greeting":
-            return {
-                "response": (
-                    "👋 Hello! I'm **AttritionAI**, your workforce analytics assistant powered by Gemini.\n\n"
-                    "Currently, **no employee CSV file is loaded**.\n\n"
-                    "To get started, please upload an employee CSV file on the dashboard to calculate attrition metrics, generate 11 visual charts, and explore high-risk segments!"
-                ),
-                "suggestions": [
-                    "How does attrition analysis work?",
-                    "What are top causes of turnover?",
-                    "How should I format my CSV?",
-                ],
-            }
-        return {
-            "response": (
-                "⚠️ **No employee dataset is currently loaded.**\n\n"
-                "Please add/upload an employee CSV file using the upload area on your dashboard. Once uploaded, I will analyze the cohort and answer questions about flight risks, department rates, and retention strategies!"
-            ),
-            "suggestions": [
-                "How does attrition analysis work?",
-                "What columns should my CSV include?",
-            ],
-        }
-
-    dataset_name = dl.DATASET_NAME or "Active Dataset"
-
-    if intent == "greeting":
-        return {
-            "response": (
-                "👋 Hello! I'm **AttritionAI**, your HR analytics assistant.\n\n"
-                f"I can help you analyze employee attrition patterns from our active dataset "
-                f"**{dataset_name}** ({kpis['total_employees']:,} employees, {kpis['attrition_rate']}% attrition).\n\n"
-                "Try asking me questions like the ones below!"
-            ),
-            "suggestions": [
-                "Who is likely to leave?",
-                "Why do employees leave?",
-                "Which department has highest attrition?",
-                "What recommendations do you have?",
-            ],
-        }
-
-    if intent == "help":
-        return {
-            "response": (
-                "📋 Here's what I can help you with:\n\n"
-                "• **\"Who is likely to leave?\"** — View high-risk employees\n"
-                "• **\"Why do employees leave?\"** — Top contributing factors\n"
-                "• **\"Which department?\"** — Department-wise attrition\n"
-                "• **\"Which role?\"** — Job role analysis\n"
-                "• **\"Overtime impact\"** — OverTime vs attrition\n"
-                "• **\"Salary impact\"** — Income band analysis\n"
-                "• **\"Age groups\"** — Age-wise breakdown\n"
-                "• **\"Tenure effect\"** — Years at company analysis\n"
-                "• **\"Satisfaction\"** — Job & environment satisfaction\n"
-                "• **\"Recommendations\"** — Actionable strategies"
-            ),
-            "suggestions": [
-                "Who is likely to leave?",
-                "Overall stats",
-                "Recommendations",
-            ],
-        }
-
-    if intent == "overall_stats":
-        return {
-            "response": (
-                f"📊 **Overall Attrition Summary for `{dataset_name}`**\n\n"
-                f"• Total Employees: **{kpis['total_employees']:,}**\n"
-                f"• Attrition Count: **{kpis['attrition_count']}** employees left\n"
-                f"• Retention Count: **{kpis['retention_count']:,}** stayed\n"
-                f"• Overall Attrition Rate: **{kpis['attrition_rate']}%**\n"
-                f"• Average Age: **{kpis['avg_age']}** years\n"
-                f"• Average Monthly Income: **₹{kpis['avg_monthly_income']:,.0f}**\n"
-                f"• Average Tenure: **{kpis['avg_years_at_company']}** years"
-            ),
-            "data": kpis,
-            "suggestions": [
-                "Why do employees leave?",
-                "Which department is worst?",
-                "Recommendations",
-            ],
-        }
-
-    generators = {
-        "who_likely_leave": _who_likely_leave_response,
-        "why_leave": _why_leave_response,
-        "department_attrition": _department_response,
-        "role_attrition": _role_response,
-        "overtime_impact": _overtime_response,
-        "salary_impact": _salary_response,
-        "age_impact": _age_response,
-        "tenure_impact": _tenure_response,
-        "satisfaction_impact": _satisfaction_response,
-        "gender_analysis": _gender_response,
-        "travel_impact": _travel_response,
-        "recommendations": _recommendations_response,
+    return {
+        "response": response_text,
+        "data": {
+            "department": dept_name,
+            "total": total_dept,
+            "departed": departed,
+            "active": active,
+            "rate": dept_rate,
+            "avg_salary": avg_salary,
+            "overtime_rate": ot_rate,
+        },
+        "suggestions": suggestions,
     }
 
-    if intent in generators:
-        return generators[intent]()
+
+def _department_comparison_response(dept1, dept2):
+    """
+    Generate side-by-side Markdown comparison table and analytical takeaway between two departments.
+    """
+    if dl.df is None or len(dl.df) == 0 or "Department" not in dl.df.columns:
+        return {
+            "response": "⚠️ No dataset loaded to perform department comparison.",
+            "suggestions": ["How do I upload a CSV?"],
+        }
+
+    df1 = dl.df[dl.df["Department"].astype(str).str.lower() == dept1.lower()]
+    df2 = dl.df[dl.df["Department"].astype(str).str.lower() == dept2.lower()]
+
+    if len(df1) == 0 or len(df2) == 0:
+        depts = _get_active_departments()
+        return {
+            "response": f"🔍 Could not find both departments `{dept1}` and `{dept2}` in active dataset.\n\nAvailable departments: {', '.join(depts)}.",
+            "suggestions": [f"Compare {depts[0]} vs {depts[1]}"] if len(depts) >= 2 else ["Overall stats"],
+        }
+
+    # Department 1 stats
+    tot1 = len(df1)
+    att1 = int(df1["AttritionFlag"].sum()) if "AttritionFlag" in df1.columns else 0
+    rate1 = round(att1 / tot1 * 100, 1) if tot1 > 0 else 0
+    sal1 = round(float(df1["MonthlyIncome"].mean()), 0) if "MonthlyIncome" in df1.columns else 0
+    ot1 = round(float(df1["OvertimeFlag"].mean() * 100), 1) if "OvertimeFlag" in df1.columns else 0
+    sat1 = round(float(df1["JobSatisfaction"].mean()), 2) if "JobSatisfaction" in df1.columns else 0
+    wlb1 = round(float(df1["WorkLifeBalance"].mean()), 2) if "WorkLifeBalance" in df1.columns else 0
+
+    # Department 2 stats
+    tot2 = len(df2)
+    att2 = int(df2["AttritionFlag"].sum()) if "AttritionFlag" in df2.columns else 0
+    rate2 = round(att2 / tot2 * 100, 1) if tot2 > 0 else 0
+    sal2 = round(float(df2["MonthlyIncome"].mean()), 0) if "MonthlyIncome" in df2.columns else 0
+    ot2 = round(float(df2["OvertimeFlag"].mean() * 100), 1) if "OvertimeFlag" in df2.columns else 0
+    sat2 = round(float(df2["JobSatisfaction"].mean()), 2) if "JobSatisfaction" in df2.columns else 0
+    wlb2 = round(float(df2["WorkLifeBalance"].mean()), 2) if "WorkLifeBalance" in df2.columns else 0
+
+    rate_diff = round(rate1 - rate2, 1)
+    if rate_diff > 0:
+        higher_dept = dept1
+        lower_dept = dept2
+        gap_str = f"**{dept1}** has a **{rate_diff}pp higher** attrition rate than **{dept2}**."
+    elif rate_diff < 0:
+        higher_dept = dept2
+        lower_dept = dept1
+        gap_str = f"**{dept2}** has a **{abs(rate_diff)}pp higher** attrition rate than **{dept1}**."
+    else:
+        gap_str = f"Both **{dept1}** and **{dept2}** share identical attrition rates of **{rate1}%**."
+
+    table_md = (
+        f"| Metric | {dept1} | {dept2} | Difference |\n"
+        f"| :--- | :---: | :---: | :---: |\n"
+        f"| **Headcount** | {tot1:,} | {tot2:,} | {tot1 - tot2:+d} |\n"
+        f"| **Departed** | {att1:,} | {att2:,} | {att1 - att2:+d} |\n"
+        f"| **Attrition Rate** | **{rate1}%** | **{rate2}%** | **{rate1 - rate2:+.1f}pp** |\n"
+        f"| **Avg Monthly Income** | ₹{sal1:,.0f} | ₹{sal2:,.0f} | ₹{sal1 - sal2:+,.0f} |\n"
+        f"| **OverTime Rate** | {ot1}% | {ot2}% | {ot1 - ot2:+.1f}pp |\n"
+        f"| **Job Satisfaction** | {sat1} / 4.0 | {sat2} / 4.0 | {sat1 - sat2:+.2f} |\n"
+        f"| **Work-Life Balance** | {wlb1} / 4.0 | {wlb2} / 4.0 | {wlb1 - wlb2:+.2f} |"
+    )
+
+    response_text = (
+        f"⚖️ **Department Comparison: {dept1} vs {dept2}**\n\n"
+        f"{table_md}\n\n"
+        f"📌 **Key Takeaway & Analysis:**\n"
+        f"{gap_str} "
+        f"Notice that OverTime is {ot1}% in {dept1} vs {ot2}% in {dept2}, "
+        f"while average compensation is ₹{sal1:,.0f} vs ₹{sal2:,.0f}. "
+        f"Target retention initiatives in the higher-turnover group to narrow the gap."
+    )
+
+    return {
+        "response": response_text,
+        "data": {
+            dept1: {"total": tot1, "attrition": att1, "rate": rate1, "salary": sal1},
+            dept2: {"total": tot2, "attrition": att2, "rate": rate2, "salary": sal2},
+        },
+        "suggestions": [
+            f"Analyze {dept1} department",
+            f"Analyze {dept2} department",
+            "Rank all departments by attrition rate",
+        ],
+    }
+
+
+def _rankings_response(entity_type="department"):
+    """
+    Generate ranked leaderboard tables (by Attrition Rate) for departments or job roles.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {
+            "response": "⚠️ No dataset loaded to compute rankings.",
+            "suggestions": ["How do I upload a CSV?"],
+        }
+
+    if entity_type == "role":
+        role_data = ae.get_job_role_data()
+        if not role_data:
+            return {"response": "No job role data available.", "suggestions": []}
+
+        rows = []
+        for i, r in enumerate(role_data, 1):
+            tier = "🔴 High Risk" if r["rate"] >= 20 else "🟡 Moderate" if r["rate"] >= 12 else "🟢 Stable"
+            rows.append(f"| {i} | {r['label']} | {r['total']} | {r['attrition']} | **{r['rate']}%** | {tier} |")
+
+        table_md = (
+            "| Rank | Job Role | Total | Departed | Attrition Rate | Flight Risk Tier |\n"
+            "| :---: | :--- | :---: | :---: | :---: | :---: |\n"
+            + "\n".join(rows)
+        )
+
+        highest = role_data[0]
+        return {
+            "response": (
+                f"👔 **Job Role Attrition Rankings (Highest to Lowest)**\n\n"
+                f"{table_md}\n\n"
+                f"📌 **Key Insight:** **{highest['label']}** ranks #1 in turnover at **{highest['rate']}%**."
+            ),
+            "data": {"roles": role_data},
+            "suggestions": [
+                "Rank departments by attrition rate",
+                "Why do employees leave?",
+                "Who is likely to leave?",
+            ],
+        }
+
+    # Department rankings
+    dept_data = ae.get_department_data()
+    if not dept_data:
+        return {"response": "No department data available.", "suggestions": []}
+
+    rows = []
+    for i, d in enumerate(dept_data, 1):
+        tier = "🔴 High" if d["rate"] >= 20 else "🟡 Moderate" if d["rate"] >= 15 else "🟢 Stable"
+        rows.append(f"| {i} | {d['label']} | {d['total']:,} | {d['attrition']:,} | **{d['rate']}%** | {tier} |")
+
+    table_md = (
+        "| Rank | Department | Total Headcount | Departed | Attrition Rate | Flight Risk Tier |\n"
+        "| :---: | :--- | :---: | :---: | :---: | :---: |\n"
+        + "\n".join(rows)
+    )
+
+    highest = dept_data[0]
+    lowest = dept_data[-1]
 
     return {
         "response": (
-            "🤔 I'm not sure I understood that. I specialize in employee attrition analysis.\n\n"
-            "Try asking me about:\n"
-            "• Who is likely to leave\n"
-            "• Why employees leave\n"
-            "• Department or role-wise attrition\n"
-            "• OverTime, salary, or satisfaction impact"
+            f"🏆 **Department Attrition Rankings (Highest to Lowest)**\n\n"
+            f"{table_md}\n\n"
+            f"📌 **Key Insight:** **{highest['label']}** leads turnover at **{highest['rate']}%**, "
+            f"while **{lowest['label']}** is the most stable department at **{lowest['rate']}%** "
+            f"(a {round(highest['rate'] - lowest['rate'], 1)}pp spread)."
         ),
+        "data": {"departments": dept_data},
         "suggestions": [
-            "Help",
+            f"Analyze {highest['label']} department",
+            f"Compare {highest['label']} vs {lowest['label']}",
+            "Who are the top high-risk active employees?",
+        ],
+    }
+
+
+def _historical_attrition_response():
+    """
+    Factual summary of HISTORICAL turnover (employees who have already left).
+    Contrasts directly with future predictive flight risk.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {
+            "response": "⚠️ No dataset is currently loaded.",
+            "suggestions": ["How do I upload a CSV?"],
+        }
+
+    kpis = ae.get_kpis()
+    dept_data = ae.get_department_data()
+
+    dept_lines = []
+    for d in dept_data:
+        dept_lines.append(f"  • **{d['label']}**: {d['attrition']:,} departed ({d['rate']}% exit rate)")
+
+    return {
+        "response": (
+            f"📉 **Historical Attrition Review (Past Departures)**\n\n"
+            f"• **Total Historical Departures:** **{kpis['attrition_count']:,}** employees left the organization\n"
+            f"• **Historical Turnover Rate:** **{kpis['attrition_rate']}%** of all recorded staff\n"
+            f"• **Active Retained Employees:** **{kpis['retention_count']:,}** employees remain\n\n"
+            f"🏛️ **Departures by Department:**\n"
+            + "\n".join(dept_lines) + "\n\n"
+            f"⚠️ **Note on Data Types:** This represents confirmed *historical* turnover (employees who already exited). "
+            f"To view *currently active* employees who are at future flight risk, ask *\"Who is likely to leave?\"*."
+        ),
+        "data": {"historical_attrition": kpis},
+        "suggestions": [
             "Who is likely to leave?",
-            "Overall stats",
+            "Why do employees leave?",
+            "What recommendations do you have?",
         ],
     }
 
 
 def _who_likely_leave_response():
+    """
+    Summary of FUTURE FLIGHT RISK among CURRENTLY ACTIVE employees.
+    Uses RiskScore (0-8) and RiskLevel ('High') calculated dynamically from the active dataset.
+    Never invents predictions.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {
+            "response": "⚠️ No dataset is currently loaded.",
+            "suggestions": ["How do I upload a CSV?"],
+        }
+
     high_risk = ae.get_high_risk_employees(min_risk_score=4, page=1, per_page=5)
     employees = high_risk["employees"]
     total_high = high_risk["total"]
@@ -569,91 +952,48 @@ def _who_likely_leave_response():
 
     return {
         "response": (
-            f"🚨 **High-Risk Employees (Risk Score ≥ 4/8)**\n\n"
-            f"There are **{total_high}** employees matching 4+ high-risk criteria.\n\n"
-            f"**Top 5 highest-risk employees:**\n"
+            f"🚨 **Active High-Risk Watchlist (Future Flight Risk)**\n\n"
+            f"There are **{total_high:,}** currently active employees matching 4+ flight risk indicators.\n\n"
+            f"**Top 5 highest-risk active employees:**\n"
             + "\n".join(emp_lines) + "\n\n"
-            f"Risk criteria include: OverTime, low income (<₹5k), short tenure (≤2 yrs), "
-            f"low satisfaction, no stock options, young age (≤25), and poor work-life balance."
+            f"📌 **Predictive Risk Criteria Grounding:**\n"
+            f"Scores are evaluated on: OverTime, low income, tenure ≤ 2 years, low satisfaction (job & env), "
+            f"no equity/stock options, young age (≤25), and poor work-life balance.\n\n"
+            f"Ask about any specific employee (e.g. *\"Tell me about #{employees[0]['employee_number']}\"*) to see their intervention plan."
         ),
         "data": {"total_high_risk": total_high, "top_employees": employees[:5]},
         "suggestions": [
-            "Why do they leave?",
-            "Recommendations",
-            "Which department is worst?",
+            f"Tell me about employee #{employees[0]['employee_number']}" if employees else "Why do employees leave?",
+            "Why do employees leave?",
+            "What recommendations do you have?",
         ],
     }
 
 
 def _why_leave_response():
+    """Top contributing factors to attrition ranked by differential impact."""
+    if dl.df is None or len(dl.df) == 0:
+        return {"response": "⚠️ No dataset loaded.", "suggestions": []}
+
     factors = ae.get_contributing_factors()
     factor_lines = []
     for i, f in enumerate(factors[:5], 1):
         factor_lines.append(
-            f"  {i}. **{f['factor']}** — +{f['impact']}pp impact "
+            f"  {i}. **{f['factor']}** — **+{f['impact']}pp impact** "
             f"({f['high_risk_group']}: {f['high_risk_rate']}% vs "
             f"{f['low_risk_group']}: {f['low_risk_rate']}%)"
         )
 
     return {
         "response": (
-            "📈 **Top Contributing Factors to Attrition**\n\n"
-            "These factors have the highest differential impact on attrition rates:\n\n"
+            "📈 **Top Contributing Factors to Turnover**\n\n"
+            "Ranked by differential impact on departure rates in this dataset:\n\n"
             + "\n".join(factor_lines) + "\n\n"
-            "The **#1 driver is OverTime** — employees working overtime leave at "
-            "nearly 3x the rate of those who don't."
+            "The strongest drivers reflect workload demands, compensation positioning, and onboarding experience."
         ),
         "data": {"factors": factors[:5]},
         "suggestions": [
             "How does overtime affect attrition?",
-            "Recommendations",
-            "Who is at risk?",
-        ],
-    }
-
-
-def _department_response():
-    dept_data = ae.get_department_data()
-    dept_lines = []
-    for d in dept_data:
-        dept_lines.append(
-            f"  • **{d['label']}**: {d['attrition']}/{d['total']} employees — **{d['rate']}%** attrition"
-        )
-
-    highest = dept_data[0]
-    return {
-        "response": (
-            "🏢 **Department-wise Attrition Analysis**\n\n"
-            + "\n".join(dept_lines) + "\n\n"
-            f"**{highest['label']}** has the highest attrition rate at **{highest['rate']}%**."
-        ),
-        "data": {"departments": dept_data},
-        "suggestions": [
-            "Which role has the highest attrition?",
-            "Why do employees leave?",
-            "Overall stats",
-        ],
-    }
-
-
-def _role_response():
-    role_data = ae.get_job_role_data()
-    role_lines = []
-    for r in role_data[:5]:
-        role_lines.append(
-            f"  • **{r['label']}**: {r['attrition']}/{r['total']} — **{r['rate']}%**"
-        )
-
-    return {
-        "response": (
-            "👔 **Job Role Attrition Analysis** (Top 5 highest)\n\n"
-            + "\n".join(role_lines) + "\n\n"
-            f"**{role_data[0]['label']}** has the highest attrition at "
-            f"**{role_data[0]['rate']}%** — nearly 1 in {100 // int(role_data[0]['rate'])} employees in this role leave."
-        ),
-        "data": {"roles": role_data},
-        "suggestions": [
-            "Which department is worst?",
             "What about salary impact?",
             "Recommendations",
         ],
@@ -661,19 +1001,25 @@ def _role_response():
 
 
 def _overtime_response():
+    """Overtime and workload impact analysis."""
+    if dl.df is None or len(dl.df) == 0:
+        return {"response": "⚠️ No dataset loaded.", "suggestions": []}
+
     ot_data = ae.get_overtime_data()
-    ot_yes = next((d for d in ot_data if d["label"] == "Yes"), {})
-    ot_no = next((d for d in ot_data if d["label"] == "No"), {})
+    ot_yes = next((d for d in ot_data if str(d["label"]).lower() == "yes"), {})
+    ot_no = next((d for d in ot_data if str(d["label"]).lower() == "no"), {})
+
+    yes_rate = ot_yes.get("rate", 0)
+    no_rate = ot_no.get("rate", 0)
+    multiplier = round(yes_rate / max(no_rate, 0.1), 1)
 
     return {
         "response": (
-            "⏰ **OverTime Impact on Attrition**\n\n"
-            f"• OverTime = **Yes**: {ot_yes.get('attrition', 0)}/{ot_yes.get('total', 0)} employees — "
-            f"**{ot_yes.get('rate', 0)}%** attrition\n"
-            f"• OverTime = **No**: {ot_no.get('attrition', 0)}/{ot_no.get('total', 0)} employees — "
-            f"**{ot_no.get('rate', 0)}%** attrition\n\n"
-            f"📌 Employees working overtime are **{round(ot_yes.get('rate', 0) / max(ot_no.get('rate', 1), 0.1), 1)}x "
-            f"more likely to leave**. This is the single strongest predictor of attrition."
+            "⏰ **OverTime & Workload Impact on Turnover**\n\n"
+            f"• **OverTime = Yes**: {ot_yes.get('attrition', 0):,}/{ot_yes.get('total', 0):,} employees — **{yes_rate}%** attrition\n"
+            f"• **OverTime = No**: {ot_no.get('attrition', 0):,}/{ot_no.get('total', 0):,} employees — **{no_rate}%** attrition\n\n"
+            f"📌 **Key Finding:** Employees working overtime leave at **{multiplier}x the rate** of standard-hours peers. "
+            f"Sustained overtime is one of the strongest leading indicators of impending attrition."
         ),
         "data": {"overtime": ot_data},
         "suggestions": [
@@ -685,20 +1031,21 @@ def _overtime_response():
 
 
 def _salary_response():
+    """Salary bands vs attrition."""
+    if dl.df is None or len(dl.df) == 0:
+        return {"response": "⚠️ No dataset loaded.", "suggestions": []}
+
     income_data = ae.get_income_data()
     lines = []
     for band in income_data:
-        lines.append(
-            f"  • **{band['label']}**: {band['attrition']}/{band['total']} — **{band['rate']}%**"
-        )
+        lines.append(f"  • **{band['label']}**: {band['attrition']:,}/{band['total']:,} — **{band['rate']}%**")
 
     return {
         "response": (
-            "💰 **Monthly Income vs Attrition**\n\n"
+            "💰 **Monthly Compensation vs Turnover**\n\n"
             + "\n".join(lines) + "\n\n"
-            f"Lower income bands show significantly higher attrition. "
-            f"The **₹1k-5k** band has the highest rate, confirming that "
-            f"compensation is a critical retention factor."
+            "Lower compensation tiers show significantly elevated departure rates. "
+            "Compensation compression is a major driver during the first 2-3 years."
         ),
         "data": {"income_bands": income_data},
         "suggestions": [
@@ -709,138 +1056,65 @@ def _salary_response():
     }
 
 
-def _age_response():
-    age_data = ae.get_age_data()
-    lines = []
-    for band in age_data:
-        lines.append(
-            f"  • **{band['label']}**: {band['attrition']}/{band['total']} — **{band['rate']}%**"
-        )
+def _satisfaction_response():
+    """Job and environment satisfaction impact."""
+    if dl.df is None or len(dl.df) == 0:
+        return {"response": "⚠️ No dataset loaded.", "suggestions": []}
+
+    sat_data = ae.get_satisfaction_data()
+    job_lines = [f"  • **{s['label']}**: {s['attrition']:,}/{s['total']:,} — **{s['rate']}%**" for s in sat_data.get("job_satisfaction", [])]
+    env_lines = [f"  • **{s['label']}**: {s['attrition']:,}/{s['total']:,} — **{s['rate']}%**" for s in sat_data.get("env_satisfaction", [])]
 
     return {
         "response": (
-            "🎂 **Age Group Attrition Analysis**\n\n"
-            + "\n".join(lines) + "\n\n"
-            "Younger employees (18-25) have the highest attrition rate, "
-            "likely due to career exploration and lower organizational commitment. "
-            "Mid-career employees (36-45) are the most stable."
+            "😊 **Satisfaction & Morale vs Turnover**\n\n"
+            "**Job Satisfaction:**\n" + "\n".join(job_lines) + "\n\n"
+            "**Environment Satisfaction:**\n" + "\n".join(env_lines) + "\n\n"
+            "Employees in Level 1 (Low) satisfaction leave at dramatically higher rates than peers in Levels 3 & 4."
         ),
-        "data": {"age_bands": age_data},
+        "data": sat_data,
         "suggestions": [
-            "What about tenure?",
-            "Gender breakdown?",
+            "How does overtime affect attrition?",
+            "Who is at risk?",
             "Recommendations",
         ],
     }
 
 
 def _tenure_response():
+    """Tenure at company breakdown."""
+    if dl.df is None or len(dl.df) == 0:
+        return {"response": "⚠️ No dataset loaded.", "suggestions": []}
+
     tenure_data = ae.get_tenure_data()
-    lines = []
-    for band in tenure_data:
-        lines.append(
-            f"  • **{band['label']}**: {band['attrition']}/{band['total']} — **{band['rate']}%**"
-        )
+    lines = [f"  • **{band['label']}**: {band['attrition']:,}/{band['total']:,} — **{band['rate']}%**" for band in tenure_data]
 
     return {
         "response": (
             "📅 **Company Tenure vs Attrition**\n\n"
             + "\n".join(lines) + "\n\n"
-            "New hires (0-2 years) have the highest attrition, suggesting the need for "
-            "stronger onboarding programs and early-career engagement initiatives."
+            "Early-career staff (0-2 years) exhibit the sharpest turnover curve. "
+            "Formal 30-60-90 day onboarding checkpoints significantly reduce this early attrition."
         ),
         "data": {"tenure_bands": tenure_data},
         "suggestions": [
             "Who is likely to leave?",
-            "Age group analysis?",
             "Recommendations",
-        ],
-    }
-
-
-def _satisfaction_response():
-    sat_data = ae.get_satisfaction_data()
-    job_lines = []
-    for s in sat_data["job_satisfaction"]:
-        job_lines.append(f"  • **{s['label']}**: {s['attrition']}/{s['total']} — **{s['rate']}%**")
-    env_lines = []
-    for s in sat_data["env_satisfaction"]:
-        env_lines.append(f"  • **{s['label']}**: {s['attrition']}/{s['total']} — **{s['rate']}%**")
-
-    return {
-        "response": (
-            "😊 **Satisfaction vs Attrition**\n\n"
-            "**Job Satisfaction:**\n" + "\n".join(job_lines) + "\n\n"
-            "**Environment Satisfaction:**\n" + "\n".join(env_lines) + "\n\n"
-            "Both dimensions show a clear inverse relationship — lower satisfaction "
-            "correlates with significantly higher attrition."
-        ),
-        "data": sat_data,
-        "suggestions": [
-            "Work-life balance impact?",
-            "Why do employees leave?",
-            "Recommendations",
-        ],
-    }
-
-
-def _gender_response():
-    gender_data = ae.get_gender_data()
-    lines = []
-    for g in gender_data:
-        lines.append(
-            f"  • **{g['label']}**: {g['attrition']}/{g['total']} — **{g['rate']}%**"
-        )
-
-    return {
-        "response": (
-            "👥 **Gender Attrition Analysis**\n\n"
-            + "\n".join(lines) + "\n\n"
-            "The difference in attrition rates between genders is relatively small, "
-            "suggesting gender is not a primary driver of attrition."
-        ),
-        "data": {"gender": gender_data},
-        "suggestions": [
-            "What factors matter most?",
-            "Department analysis?",
             "Overall stats",
         ],
     }
 
 
-def _travel_response():
-    travel_data = ae.get_travel_data()
-    lines = []
-    for t in travel_data:
-        lines.append(
-            f"  • **{t['label']}**: {t['attrition']}/{t['total']} — **{t['rate']}%**"
-        )
-
-    return {
-        "response": (
-            "✈️ **Business Travel Impact on Attrition**\n\n"
-            + "\n".join(lines) + "\n\n"
-            "Frequent travelers show notably higher attrition rates, "
-            "indicating that excessive travel demands contribute to employee turnover."
-        ),
-        "data": {"travel": travel_data},
-        "suggestions": [
-            "Distance from home impact?",
-            "Work-life balance?",
-            "Recommendations",
-        ],
-    }
-
-
 def _recommendations_response():
+    """Actionable retention recommendations tied to active dataset drivers."""
     factors = ae.get_contributing_factors()
     if not factors:
         return {
             "response": (
-                "💡 **Actionable Recommendations**\n\n"
-                "• Conduct 1-on-1 retention interviews with high-risk employees.\n"
-                "• Benchmark team compensation against market rates.\n"
-                "• Monitor and cap excessive overtime hours."
+                "💡 **Actionable Retention Recommendations**\n\n"
+                "• Conduct proactive retention check-ins with high-risk employees.\n"
+                "• Benchmark department compensation against market rates.\n"
+                "• Monitor and cap sustained overtime hours."
             ),
             "suggestions": ["Who is likely to leave?", "Overall stats"],
         }
@@ -848,50 +1122,194 @@ def _recommendations_response():
     rec_items = []
     for i, f in enumerate(factors[:4], 1):
         rec_items.append(
-            f"{i}. **Address {f['factor']}** — {f['description']}. "
-            f"Focus targeted retention interventions on the {f['high_risk_group']} segment."
+            f"{i}. **Address {f['factor']}** — {f['description']}.\n"
+            f"   *Target Intervention:* Prioritize the {f['high_risk_group']} cohort for immediate management check-ins."
         )
 
     return {
         "response": (
-            "💡 **Actionable Recommendations to Reduce Attrition**\n\n"
-            "Based on the analyzed drivers for this dataset:\n\n"
+            "💡 **Data-Driven Retention Recommendations**\n\n"
+            "Derived directly from the primary risk drivers in this dataset:\n\n"
             + "\n\n".join(rec_items) + "\n\n"
-            "📊 **Suggested Strategy:** Monitor flight risks weekly, cap sustained overtime, and conduct quarterly compensation reviews."
+            "📊 **Suggested Retention Rhythm:** Track the High-Risk Watchlist weekly, cap consecutive overtime, and establish 90-day onboarding mentorships."
         ),
         "suggestions": [
-            "Who is likely to leave?",
+            "Who are the top high-risk active employees?",
+            "Rank all departments by attrition rate",
             "Overall stats",
-            "Which department needs attention?",
         ],
     }
 
 
-def process_message(user_message):
+def _overall_stats_response():
+    """Dataset summary and KPI metrics."""
+    if dl.df is None or len(dl.df) == 0:
+        return {"response": "⚠️ No dataset loaded.", "suggestions": []}
+
+    kpis = ae.get_kpis()
+    dataset_name = dl.DATASET_NAME or "Active Dataset"
+
+    return {
+        "response": (
+            f"📊 **Workforce Attrition Summary for `{dataset_name}`**\n\n"
+            f"• **Total Headcount:** **{kpis['total_employees']:,}** employees\n"
+            f"• **Historical Departures:** **{kpis['attrition_count']:,}** employees left\n"
+            f"• **Current Active Headcount:** **{kpis['retention_count']:,}** employees retained\n"
+            f"• **Overall Attrition Rate:** **{kpis['attrition_rate']}%**\n"
+            f"• **Average Employee Age:** **{kpis['avg_age']}** years\n"
+            f"• **Average Monthly Income:** **₹{kpis['avg_monthly_income']:,.0f}**\n"
+            f"• **Average Tenure:** **{kpis['avg_years_at_company']}** years"
+        ),
+        "data": kpis,
+        "suggestions": [
+            "Why do employees leave?",
+            "Rank all departments by attrition rate",
+            "Who is likely to leave?",
+        ],
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+#  Intent Detection & Router
+# ─────────────────────────────────────────────────────────────
+
+def _match_intent(message, session):
+    """
+    Match user message to an intent using keyword priority, regex, and session context.
+    """
+    msg = message.lower().strip()
+
+    # 1. Employee lookup by ID
+    emp_id = _extract_employee_id(message)
+    if emp_id:
+        return "employee_lookup", {"emp_id": emp_id}
+
+    # 2. Conversational follow-ups using session context
+    pronouns = ["they", "them", "he", "she", "him", "her", "this employee", "that employee", "his"]
+    if any(re.search(r"\b" + re.escape(p) + r"\b", msg) for p in pronouns):
+        if session.get("last_employee_id"):
+            return "employee_followup", {"emp_id": session["last_employee_id"]}
+
+    dept_pronouns = ["there", "this department", "that department", "that team", "how to fix it"]
+    if any(p in msg for p in dept_pronouns) and session.get("last_department"):
+        return "department_deep_dive", {"dept": session["last_department"]}
+
+    # 3. Department comparison
+    compare_triggers = ["compare", " vs ", " versus ", "difference between"]
+    if any(t in msg for t in compare_triggers):
+        depts = _extract_departments_to_compare(message)
+        if len(depts) >= 2:
+            return "department_comparison", {"dept1": depts[0], "dept2": depts[1]}
+
+    # 4. Department deep dive
+    dept_triggers = ["analyze", "how is", "deep dive", "tell me about", "department", "dept"]
+    if any(t in msg for t in dept_triggers):
+        dept = _extract_department(message)
+        if dept:
+            return "department_deep_dive", {"dept": dept}
+
+    # If message directly mentions a department name
+    dept = _extract_department(message)
+    if dept and ("why" in msg or "rate" in msg or "attrition" in msg or "doing" in msg or "status" in msg):
+        return "department_deep_dive", {"dept": dept}
+
+    # 5. Rankings
+    ranking_triggers = ["rank", "ranking", "rankings", "leaderboard", "highest to lowest", "worst department", "top department"]
+    if any(t in msg for t in ranking_triggers):
+        if "role" in msg or "job" in msg or "position" in msg:
+            return "rankings_roles", {}
+        return "rankings_departments", {}
+
+    # 6. Historical Attrition vs Future Risk
+    historical_triggers = ["who left", "who has left", "historical attrition", "past attrition", "past turnover", "how many departed", "departed employees", "former employees"]
+    if any(t in msg for t in historical_triggers):
+        return "historical_attrition", {}
+
+    who_leave_triggers = [
+        "who is likely", "who will leave", "who might leave", "likely to leave",
+        "at risk", "flight risk", "high risk", "high-risk", "who is at risk",
+        "risky", "going to leave", "watchlist", "active employees at risk"
+    ]
+    if any(t in msg for t in who_leave_triggers):
+        return "who_likely_leave", {}
+
+    # 7. Greetings & Help (strict word boundary matching)
+    if re.search(r"\b(hi|hello|hey|good morning|good afternoon|howdy)\b", msg):
+        return "greeting", {}
+    if re.search(r"\b(help|commands|options|menu|what can you do)\b", msg):
+        return "help", {}
+
+    # 8. Other core analytical intents
+    intents = [
+        ("why_leave", ["why leave", "why do they leave", "reasons for leaving", "causes", "why employees leave", "contributing factors", "root cause", "why attrition", "why turnover"], 10),
+        ("recommendations", ["recommend", "recommendation", "recommendations", "suggestion", "suggestions", "how to reduce", "reduce attrition", "how to improve", "retention strategy", "retention plan", "action plan", "what to do", "prevent attrition"], 10),
+        ("overtime_impact", ["overtime", "over time", "working hours", "extra hours", "overwork", "workload", "burnout"], 8),
+        ("salary_impact", ["salary", "salaries", "income", "pay", "compensation", "wage", "wages", "low pay"], 8),
+        ("satisfaction_impact", ["satisfaction", "happy", "unhappy", "satisfied", "dissatisfied", "engagement", "work life balance", "morale"], 8),
+        ("tenure_impact", ["tenure", "years at company", "new hire", "new hires", "experience", "seniority"], 7),
+        ("overall_stats", ["overall", "summary", "total", "how many", "attrition rate", "overview", "statistics", "numbers", "data", "count", "kpi", "kpis"], 6),
+    ]
+
+    best_intent = None
+    best_score = 0
+
+    for intent_name, keywords, priority in intents:
+        score = 0
+        for keyword in keywords:
+            if re.search(r"\b" + re.escape(keyword), msg):
+                score += len(keyword) * priority
+        if score > best_score:
+            best_score = score
+            best_intent = intent_name
+
+    if best_intent:
+        return best_intent, {}
+
+    return "unknown", {}
+
+
+# ─────────────────────────────────────────────────────────────
+#  Main Process Message Entry Point
+# ─────────────────────────────────────────────────────────────
+
+def process_message(user_message, session_id="default"):
     """
     Main entry point: process a user message and return a chatbot response.
-    Powered by Google Gemini Generative AI with verified dataset grounding.
-    Supports individual employee lookups by Employee ID/number.
-    Falls back gracefully to pre-computed rules if Gemini API is unreachable.
+    Features:
+      - Modular rule-based intent detection engine (100% self-sufficient offline).
+      - Seamless Google Gemini Generative AI enhancement when API key is available.
+      - Support for alphanumeric employee ID lookups, department deep dives, comparisons, rankings.
+      - Conversational context preservation across query turns.
+      - Validates queries and handles missing data gracefully.
     """
-    # ── Check for Individual Employee Inquiry ─────────────
-    emp_id = _extract_employee_id(user_message)
-    if emp_id:
-        emp = ae.get_employee_by_id(emp_id)
-        if not emp:
-            if dl.df is None or len(dl.df) == 0:
-                return {
-                    "intent": "employee_lookup",
-                    "response": (
-                        "⚠️ **No employee dataset is currently loaded.**\n\n"
-                        "Please upload an employee CSV file on the dashboard first so I can save the records to Supabase and retrieve profiles."
-                    ),
-                    "suggestions": [
-                        "How does attrition analysis work?",
-                        "What columns should my CSV include?",
-                    ],
-                    "source": "rule_based_fallback",
-                }
+    session = get_session(session_id)
+    session["history"].append(user_message)
+
+    # Missing dataset guard
+    if dl.df is None or len(dl.df) == 0:
+        return {
+            "intent": "no_dataset",
+            "response": (
+                "⚠️ **No employee dataset is currently loaded.**\n\n"
+                "Please upload an employee CSV file on the dashboard using the upload zone or 'Upload CSV' button. "
+                "Once uploaded, I will instantly analyze the cohort and answer questions about flight risks, department rates, and retention strategies!"
+            ),
+            "suggestions": [
+                "How does employee attrition analysis work?",
+                "What CSV columns should my dataset include?",
+                "How do I upload an employee dataset?",
+            ],
+            "source": "rule_based_fallback",
+        }
+
+    # Intent matching
+    intent, intent_params = _match_intent(user_message, session)
+
+    # ── 1. Individual Employee Lookup / Follow-up ──────────────
+    if intent in ("employee_lookup", "employee_followup"):
+        emp_id = intent_params.get("emp_id") or _extract_employee_id(user_message) or session.get("last_employee_id")
+        emp = ae.get_employee_by_id(emp_id) if emp_id else None
+
         if not emp:
             samples = ae.get_sample_employee_ids(limit=4)
             sample_str = ""
@@ -903,21 +1321,27 @@ def process_message(user_message):
                 "intent": "employee_lookup",
                 "response": (
                     f"🔍 **Employee ID `#{emp_id}` not found** in the active dataset (`{dl.DATASET_NAME or 'uploaded cohort'}`).\n\n"
-                    f"There are **{dl.TOTAL_EMPLOYEES:,}** total employees in this dataset.{sample_str}\n\n"
-                    f"Please verify the employee ID or consult the High-Risk Watchlist table on the dashboard."
+                    f"There are **{dl.TOTAL_EMPLOYEES:,}** total employees in this cohort.{sample_str}\n\n"
+                    f"Please verify the employee ID or check the High-Risk Watchlist table on your dashboard."
                 ),
                 "suggestions": [
-                    f"Tell me about employee {samples[0]['id']}" if samples else "Who is likely to leave?",
-                    "Who is likely to leave?",
-                    "Which department has highest attrition?",
+                    f"Tell me about employee #{samples[0]['id']}" if samples else "Who is likely to leave?",
+                    "Who are the top high-risk active employees?",
+                    "Rank all departments by attrition rate",
                 ],
                 "source": "rule_based_fallback",
             }
 
-        # Employee was found! Build structured markdown card
+        # Update session context
+        session["last_employee_id"] = emp["employee_number"]
+        session["last_employee"] = emp
+        session["last_department"] = emp["department"]
+        session["last_role"] = emp["job_role"]
+        session["last_intent"] = "employee_lookup"
+
         fallback_card = _format_employee_card(emp)
 
-        # Build specific grounding context for Gemini
+        # Grounding for Gemini
         emp_context = (
             f"[SPECIFIC EMPLOYEE RECORD FROM VERIFIED DATASET]\n"
             f"Employee #{emp['employee_number']}:\n"
@@ -926,15 +1350,12 @@ def process_message(user_message):
             f"- Compensation: ₹{emp['monthly_income']:,.0f}/mo, Stock Option Level: {emp['stock_option_level']}\n"
             f"- Tenure: {emp['years_at_company']} years at company\n"
             f"- Overtime: {emp['overtime']}\n"
-            f"- Satisfaction: Job={emp['job_satisfaction']}/4 ({emp['job_satisfaction_label']}), "
-            f"Environment={emp['env_satisfaction']}/4, Work-Life Balance={emp['work_life_balance']}/4\n"
-            f"- Distance From Home: {emp['distance_from_home']} miles, Travel: {emp['business_travel']}\n"
+            f"- Satisfaction: Job={emp['job_satisfaction']}/4, Environment={emp['env_satisfaction']}/4, Work-Life Balance={emp['work_life_balance']}/4\n"
             f"- Flight Risk Score: {emp['risk_score']}/8 ({emp['risk_level']} Flight Risk)\n"
-            f"- Attrition Status: {emp['attrition']} ({'Departed/Left' if emp['attrition_flag'] else 'Active/Retained'})\n"
-            f"- Specific Flight Risk Drivers: {', '.join(emp['risk_reasons']) if emp['risk_reasons'] else 'None (Stable profile)'}\n\n"
-            f"INSTRUCTION: Give a comprehensive, structured breakdown of this specific employee. "
-            f"Quote their exact role, salary, satisfaction ratings, flight risk score, key risk drivers, "
-            f"and tailored HR retention recommendations for this individual. Use clean markdown bullets and emojis."
+            f"- Status: {'Left/Departed (Historical Attrition)' if emp['attrition'] == 'Yes' else 'Active Employee (Retained)'}\n"
+            f"- Specific Triggers: {', '.join(emp.get('risk_reasons', [])) if emp.get('risk_reasons') else 'None'}\n\n"
+            f"INSTRUCTION: Clearly state whether this employee is HISTORICALLY DEPARTED or CURRENTLY ACTIVE. "
+            f"Break down their compensation, working conditions, flight risk score, and concrete retention recommendations."
         )
 
         gemini_reply = _call_gemini_api(user_message, custom_context=emp_context)
@@ -944,9 +1365,9 @@ def process_message(user_message):
                 "response": gemini_reply,
                 "data": {"employee": emp},
                 "suggestions": [
-                    "Why do employees leave?",
-                    "Who is likely to leave?",
-                    "What recommendations do you have?",
+                    f"Why is #{emp['employee_number']} at risk?",
+                    f"Analyze {emp['department']} department",
+                    "Who are the top high-risk active employees?",
                 ],
                 "source": "gemini_ai",
             }
@@ -956,45 +1377,180 @@ def process_message(user_message):
             "response": fallback_card,
             "data": {"employee": emp},
             "suggestions": [
-                "Why do employees leave?",
-                "Who is likely to leave?",
-                "What recommendations do you have?",
+                f"Why is #{emp['employee_number']} at risk?",
+                f"Analyze {emp['department']} department",
+                "Who are the top high-risk active employees?",
             ],
             "source": "rule_based_fallback",
         }
 
-    # ── General Query Handling ─────────────────────────────
-    intent = _match_intent(user_message)
-    fallback_data = _format_response(intent) if intent != "unknown" else None
+    # ── 2. Department Deep Dive ─────────────────────────────────
+    if intent == "department_deep_dive":
+        dept_name = intent_params.get("dept") or _extract_department(user_message)
+        if dept_name:
+            session["last_department"] = dept_name
+            session["last_intent"] = "department_deep_dive"
 
-    # 1. Primary path: Generate response using Google Gemini AI
-    gemini_reply = _call_gemini_api(user_message)
-    if gemini_reply:
-        suggestions = [
-            "Who is likely to leave?",
-            "Why do employees leave?",
-            "Which department has highest attrition?",
-            "What recommendations do you have?",
-        ]
-        if fallback_data and fallback_data.get("suggestions"):
-            suggestions = fallback_data["suggestions"]
+            dept_res = _department_deep_dive_response(dept_name)
 
+            # Optional Gemini enhancement
+            gemini_reply = _call_gemini_api(user_message, custom_context=dept_res["response"])
+            if gemini_reply:
+                return {
+                    "intent": "department_deep_dive",
+                    "response": gemini_reply,
+                    "data": dept_res.get("data"),
+                    "suggestions": dept_res.get("suggestions"),
+                    "source": "gemini_ai",
+                }
+
+            return {
+                "intent": "department_deep_dive",
+                "response": dept_res["response"],
+                "data": dept_res.get("data"),
+                "suggestions": dept_res.get("suggestions"),
+                "source": "rule_based_fallback",
+            }
+
+    # ── 3. Department Comparison ───────────────────────────────
+    if intent == "department_comparison":
+        dept1 = intent_params.get("dept1")
+        dept2 = intent_params.get("dept2")
+        if dept1 and dept2:
+            session["last_department"] = dept1
+            session["last_intent"] = "department_comparison"
+
+            comp_res = _department_comparison_response(dept1, dept2)
+
+            gemini_reply = _call_gemini_api(user_message, custom_context=comp_res["response"])
+            if gemini_reply:
+                return {
+                    "intent": "department_comparison",
+                    "response": gemini_reply,
+                    "data": comp_res.get("data"),
+                    "suggestions": comp_res.get("suggestions"),
+                    "source": "gemini_ai",
+                }
+
+            return {
+                "intent": "department_comparison",
+                "response": comp_res["response"],
+                "data": comp_res.get("data"),
+                "suggestions": comp_res.get("suggestions"),
+                "source": "rule_based_fallback",
+            }
+
+    # ── 4. Rankings ─────────────────────────────────────────────
+    if intent in ("rankings_departments", "rankings_roles"):
+        entity = "role" if intent == "rankings_roles" else "department"
+        session["last_intent"] = intent
+        rank_res = _rankings_response(entity_type=entity)
         return {
             "intent": intent,
+            "response": rank_res["response"],
+            "data": rank_res.get("data"),
+            "suggestions": rank_res.get("suggestions"),
+            "source": "rule_based_fallback",
+        }
+
+    # ── 5. Historical Attrition vs Future Flight Risk ───────────
+    if intent == "historical_attrition":
+        session["last_intent"] = intent
+        hist_res = _historical_attrition_response()
+        return {
+            "intent": intent,
+            "response": hist_res["response"],
+            "data": hist_res.get("data"),
+            "suggestions": hist_res.get("suggestions"),
+            "source": "rule_based_fallback",
+        }
+
+    if intent == "who_likely_leave":
+        session["last_intent"] = intent
+        who_res = _who_likely_leave_response()
+        return {
+            "intent": intent,
+            "response": who_res["response"],
+            "data": who_res.get("data"),
+            "suggestions": who_res.get("suggestions"),
+            "source": "rule_based_fallback",
+        }
+
+    # ── 6. Other Core Analytical Intents ───────────────────────
+    generators = {
+        "why_leave": _why_leave_response,
+        "overtime_impact": _overtime_response,
+        "salary_impact": _salary_response,
+        "satisfaction_impact": _satisfaction_response,
+        "tenure_impact": _tenure_response,
+        "recommendations": _recommendations_response,
+        "overall_stats": _overall_stats_response,
+    }
+
+    if intent in generators:
+        session["last_intent"] = intent
+        res = generators[intent]()
+        return {
+            "intent": intent,
+            "response": res["response"],
+            "data": res.get("data"),
+            "suggestions": res.get("suggestions"),
+            "source": "rule_based_fallback",
+        }
+
+    # ── 7. Greetings & Help ────────────────────────────────────
+    if intent == "greeting":
+        kpis = ae.get_kpis()
+        dynamic_q = generate_dataset_questions()
+        return {
+            "intent": "greeting",
+            "response": (
+                f"👋 Hello! I'm **AttritionAI**, your HR workforce analytics partner.\n\n"
+                f"I am actively analyzing `{dl.DATASET_NAME or 'Active Dataset'}` "
+                f"({kpis['total_employees']:,} employees, {kpis['attrition_rate']}% attrition).\n\n"
+                f"What would you like to explore?"
+            ),
+            "suggestions": dynamic_q[:4],
+            "source": "rule_based_fallback",
+        }
+
+    if intent == "help":
+        dynamic_q = generate_dataset_questions()
+        return {
+            "intent": "help",
+            "response": (
+                "📋 **Here is what I can analyze dynamically for you:**\n\n"
+                "• **Employee Profile:** e.g. *\"Tell me about employee #E02744\"*\n"
+                "• **Department Analysis:** e.g. *\"Analyze Sales department\"*\n"
+                "• **Department Comparison:** e.g. *\"Compare Sales vs R&D\"*\n"
+                "• **Rankings & Tables:** e.g. *\"Rank all departments by attrition rate\"*\n"
+                "• **Active Flight Risk:** e.g. *\"Who are the top high-risk active employees?\"*\n"
+                "• **Historical Attrition:** e.g. *\"Who has left the company?\"*\n"
+                "• **Risk Factors:** e.g. *\"How does OverTime impact turnover?\"*\n"
+                "• **Retention Plan:** e.g. *\"What recommendations do you have?\"*"
+            ),
+            "suggestions": dynamic_q[:4],
+            "source": "rule_based_fallback",
+        }
+
+    # ── 8. Freeform / Fallback with Gemini or Smart Guidance ───
+    gemini_reply = _call_gemini_api(user_message)
+    dynamic_q = generate_dataset_questions()
+
+    if gemini_reply:
+        return {
+            "intent": "freeform",
             "response": gemini_reply,
-            "data": fallback_data.get("data") if fallback_data else None,
-            "suggestions": suggestions,
+            "suggestions": dynamic_q[:4],
             "source": "gemini_ai",
         }
 
-    # 2. Offline / Fallback path: Pre-computed dataset responses
-    response_data = _format_response(intent)
     return {
-        "intent": intent,
-        "response": response_data.get("response", ""),
-        "data": response_data.get("data"),
-        "suggestions": response_data.get("suggestions", []),
+        "intent": "unknown",
+        "response": (
+            "🤔 I specialize in employee attrition analytics, flight-risk modeling, and retention planning.\n\n"
+            "Try asking me one of the suggested questions below based on your active dataset!"
+        ),
+        "suggestions": dynamic_q[:4],
         "source": "rule_based_fallback",
     }
-
-

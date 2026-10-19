@@ -837,6 +837,61 @@ body {
   margin-bottom: 4px;
 }
 
+.chat-code {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--primary-700);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.chat-msg.user .chat-code {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.chat-table-wrapper {
+  overflow-x: auto;
+  margin: 10px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: #ffffff;
+}
+
+.chat-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.chat-table th {
+  background: #f8fafc;
+  color: var(--text-main);
+  font-weight: 700;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.chat-table td {
+  padding: 6px 9px;
+  border-bottom: 1px solid #f1f5f9;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.chat-table tr:last-child td {
+  border-bottom: none;
+}
+
+.chat-table tr:hover td {
+  background: #f8fafc;
+}
+
 .bubble-meta {
   font-size: 0.65rem;
   color: var(--text-muted);

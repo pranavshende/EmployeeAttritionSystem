@@ -154,7 +154,10 @@ def filtered():
 @dashboard_bp.route("/api/dataset/info", methods=["GET"])
 def dataset_info():
     from .. import data_loader as dl
-    return jsonify(dl.DATASET_INFO)
+    from .. import chatbot_engine as ce
+    info = dict(dl.DATASET_INFO)
+    info["suggested_questions"] = ce.generate_dataset_questions()
+    return jsonify(info)
 
 
 @dashboard_bp.route("/api/dataset/upload", methods=["POST"])
@@ -177,13 +180,21 @@ def upload_dataset():
         # 1. Load and normalize CSV dynamically
         dl.load_custom_csv(file, filename)
 
-        # 2. Generate on-the-spot AI executive summary using Gemini
+        # 2. Reset chatbot conversational sessions for new dataset
+        ce.clear_sessions()
+
+        # 3. Generate on-the-spot AI executive summary using Gemini
         ai_summary = ce.generate_ai_dataset_summary(filename)
+        suggested_q = ce.generate_dataset_questions()
+
+        info = dict(dl.DATASET_INFO)
+        info["suggested_questions"] = suggested_q
 
         return jsonify({
             "status": "success",
             "message": f"Successfully loaded '{filename}' ({dl.TOTAL_EMPLOYEES:,} records)",
-            "dataset_info": dl.DATASET_INFO,
+            "dataset_info": info,
+            "suggested_questions": suggested_q,
             "ai_summary": ai_summary,
             "kpis": ae.get_kpis(),
         })
@@ -195,11 +206,16 @@ def upload_dataset():
 @dashboard_bp.route("/api/dataset/clear", methods=["POST"])
 def clear_or_reset_dataset():
     from .. import data_loader as dl
+    from .. import chatbot_engine as ce
     dl.clear_dataset()
+    ce.clear_sessions()
+    info = dict(dl.DATASET_INFO)
+    info["suggested_questions"] = ce.generate_dataset_questions()
     return jsonify({
         "status": "success",
         "message": "Dataset cleared. Ready for new CSV upload.",
-        "dataset_info": dl.DATASET_INFO,
+        "dataset_info": info,
+        "suggested_questions": info["suggested_questions"],
     })
 
 
@@ -208,11 +224,16 @@ def load_sample_dataset():
     from .. import data_loader as dl
     from .. import chatbot_engine as ce
     dl.load_default_dataset()
+    ce.clear_sessions()
     ai_summary = ce.generate_ai_dataset_summary()
+    suggested_q = ce.generate_dataset_questions()
+    info = dict(dl.DATASET_INFO)
+    info["suggested_questions"] = suggested_q
     return jsonify({
         "status": "success",
         "message": "Sample dataset loaded successfully",
-        "dataset_info": dl.DATASET_INFO,
+        "dataset_info": info,
+        "suggested_questions": suggested_q,
         "ai_summary": ai_summary,
         "kpis": ae.get_kpis(),
     })
