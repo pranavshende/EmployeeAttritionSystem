@@ -1,0 +1,58 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider             = "prisma-client-py"
+  recursive_type_depth = 5
+}
+
+model UploadedDataset {
+  id             String     @id @default(uuid())
+  filename       String
+  totalEmployees Int
+  attritionCount Int
+  retentionCount Int
+  attritionRate  Float
+  uploadedAt     DateTime   @default(now())
+  employees      Employee[]
+
+  @@map("uploaded_datasets")
+}
+
+model Employee {
+  id                   String          @id @default(uuid())
+  datasetId            String
+  dataset              UploadedDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  employeeNumber       String
+  age                  Int
+  gender               String?
+  maritalStatus        String?
+  department           String
+  jobRole              String
+  monthlyIncome        Float
+  overtime             String
+  yearsAtCompany       Int
+  distanceFromHome     Int?
+  businessTravel       String?
+  jobSatisfaction      Int
+  jobSatisfactionLabel String?
+  envSatisfaction      Int
+  envSatisfactionLabel String?
+  workLifeBalance      Int
+  workLifeBalanceLabel String?
+  stockOptionLevel     Int
+  riskScore            Int
+  riskLevel            String
+  attrition            String
+  attritionFlag        Boolean         @default(false)
+  riskReasons          String[]        @default([])
+
+  createdAt            DateTime        @default(now())
+
+  @@index([employeeNumber])
+  @@index([datasetId])
+  @@map("employees")
+}

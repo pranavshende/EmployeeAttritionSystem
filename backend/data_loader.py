@@ -5,9 +5,12 @@ Supports automatic column detection, normalization, and on-the-spot band computa
 """
 
 import os
+import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 # Path to the default cleaned CSV copy
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
