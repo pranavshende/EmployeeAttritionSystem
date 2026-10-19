@@ -1,41 +1,49 @@
 /**
- * API client for communicating with Flask backend
+ * API client for communicating with Flask backend.
+ * Uses VITE_API_BASE_URL if set in environment (e.g. Render production URL),
+ * falling back to relative paths for local dev proxy.
  */
 
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_URL ||
+  ''
+).replace(/\/$/, '');
+
 export async function fetchKPIs() {
-  const res = await fetch('/api/kpis');
+  const res = await fetch(`${API_BASE_URL}/api/kpis`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
 
 export async function fetchChart(name) {
-  const res = await fetch(`/api/charts/${name}`);
+  const res = await fetch(`${API_BASE_URL}/api/charts/${name}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
 
 export async function fetchHighRisk(page = 1, limit = 15) {
-  const res = await fetch(`/api/high-risk?page=${page}&limit=${limit}`);
+  const res = await fetch(`${API_BASE_URL}/api/high-risk?page=${page}&limit=${limit}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
 
 export async function fetchFilterOptions() {
-  const res = await fetch('/api/filters');
+  const res = await fetch(`${API_BASE_URL}/api/filters`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
 
 export async function fetchFiltered(params = {}) {
   const query = new URLSearchParams(params).toString();
-  const url = query ? `/api/filtered?${query}` : '/api/filtered';
+  const url = query ? `${API_BASE_URL}/api/filtered?${query}` : `${API_BASE_URL}/api/filtered`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
 
 export async function sendChatMessage(message) {
-  const res = await fetch('/api/chatbot/message', {
+  const res = await fetch(`${API_BASE_URL}/api/chatbot/message`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
@@ -45,7 +53,7 @@ export async function sendChatMessage(message) {
 }
 
 export async function fetchDatasetInfo() {
-  const res = await fetch('/api/dataset/info');
+  const res = await fetch(`${API_BASE_URL}/api/dataset/info`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
@@ -54,7 +62,7 @@ export async function uploadDataset(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  const res = await fetch('/api/dataset/upload', {
+  const res = await fetch(`${API_BASE_URL}/api/dataset/upload`, {
     method: 'POST',
     body: formData,
   });
@@ -66,7 +74,7 @@ export async function uploadDataset(file) {
 }
 
 export async function resetDataset() {
-  const res = await fetch('/api/dataset/clear', {
+  const res = await fetch(`${API_BASE_URL}/api/dataset/clear`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
   });
@@ -75,7 +83,7 @@ export async function resetDataset() {
 }
 
 export async function clearDataset() {
-  const res = await fetch('/api/dataset/clear', {
+  const res = await fetch(`${API_BASE_URL}/api/dataset/clear`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
   });
@@ -84,7 +92,7 @@ export async function clearDataset() {
 }
 
 export async function loadSampleDataset() {
-  const res = await fetch('/api/dataset/load-sample', {
+  const res = await fetch(`${API_BASE_URL}/api/dataset/load-sample`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
   });
