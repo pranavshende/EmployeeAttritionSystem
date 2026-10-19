@@ -251,8 +251,68 @@ def _update_state(new_df, dataset_name, is_custom=True, detected_target="Attriti
     }
 
 
+ACTIVE_DATASET_POINTER = os.path.join(DATA_DIR, ".active_dataset")
+
+
+def _set_active_dataset_pointer(filename):
+    """Persist active dataset name to disk so restarts and workers retain the active dataset."""
+    try:
+        with open(ACTIVE_DATASET_POINTER, "w", encoding="utf-8") as f:
+            f.write(filename.strip())
+    except Exception as e:
+        logger.warning(f"Could not write active dataset pointer: {e}")
+
+
+def _clear_active_dataset_pointer():
+    """Remove active dataset pointer on explicit user clear/reset."""
+    try:
+        if os.path.exists(ACTIVE_DATASET_POINTER):
+            os.remove(ACTIVE_DATASET_POINTER)
+    except Exception as e:
+        logger.warning(f"Could not clear active dataset pointer: {e}")
+
+
+def ensure_dataset_loaded():
+    """
+    Ensure an active dataset is in memory.
+    If df is None, restores the last active dataset from disk or latest upload.
+    """
+    global df
+    if df is not None and len(df) > 0:
+        return df
+
+    # 1. Check active dataset pointer
+    if os.path.exists(ACTIVE_DATASET_POINTER):
+        try:
+            with open(ACTIVE_DATASET_POINTER, "r", encoding="utf-8") as f:
+                filename = f.read().strip()
+            if filename:
+                candidate = os.path.join(UPLOADS_DIR, filename)
+                if os.path.exists(candidate):
+                    return load_custom_csv(candidate, filename)
+                candidate_data = os.path.join(DATA_DIR, filename)
+                if os.path.exists(candidate_data):
+                    return load_custom_csv(candidate_data, filename)
+        except Exception as e:
+            logger.warning(f"Error reading active dataset pointer: {e}")
+
+    # 2. Check for latest uploaded file in UPLOADS_DIR
+    if os.path.exists(UPLOADS_DIR):
+        files = [f for f in os.listdir(UPLOADS_DIR) if f.lower().endswith(".csv")]
+        if files:
+            target = "employee_attrition_sample_10000.csv" if "employee_attrition_sample_10000.csv" in files else files[0]
+            target_path = os.path.join(UPLOADS_DIR, target)
+            return load_custom_csv(target_path, target)
+
+    # 3. Fallback to default CSV
+    if os.path.exists(DEFAULT_CSV_PATH):
+        return load_default_dataset()
+
+    return None
+
+
 def clear_dataset():
-    """Clear active dataset and reset to uninitialized state (do not show pre-existing CSV)."""
+    """Clear active dataset and reset to uninitialized state."""
     global df, TOTAL_EMPLOYEES, ATTRITION_COUNT, RETENTION_COUNT, ATTRITION_RATE, DATASET_NAME, DATASET_INFO
     df = None
     TOTAL_EMPLOYEES = 0
@@ -270,20 +330,22 @@ def clear_dataset():
         "attrition_rate": 0.0,
         "columns_count": 0,
     }
+    _clear_active_dataset_pointer()
 
 
 def load_default_dataset():
-    """Load default IBM HR Attrition dataset (called only on explicit user request)."""
+    """Load default IBM HR Attrition dataset."""
     raw_df = pd.read_csv(DEFAULT_CSV_PATH, encoding="utf-8-sig")
     clean_df = _normalize_and_preprocess(raw_df, dataset_name="WA_Fn-UseC_-HR-Employee-Attrition.csv", is_custom=False)
     _update_state(clean_df, "WA_Fn-UseC_-HR-Employee-Attrition.csv", is_custom=False)
+    _set_active_dataset_pointer("WA_Fn-UseC_-HR-Employee-Attrition.csv")
     return clean_df
 
 
 def load_custom_csv(file_stream_or_path, filename):
     """
     Load an arbitrary uploaded CSV file and dynamically transform it for the dashboard.
-    Saves the file to uploads directory and updates the module singleton state.
+    Saves the file to uploads directory, writes pointer, and updates module state.
     """
     save_path = os.path.join(UPLOADS_DIR, filename)
     if isinstance(file_stream_or_path, str):
@@ -295,6 +357,7 @@ def load_custom_csv(file_stream_or_path, filename):
 
     clean_df = _normalize_and_preprocess(raw_df, dataset_name=filename, is_custom=True)
     _update_state(clean_df, filename, is_custom=True)
+    _set_active_dataset_pointer(filename)
 
     # Persist dataset and employee records to Supabase PostgreSQL database via Prisma
     try:
@@ -313,6 +376,6 @@ def load_custom_csv(file_stream_or_path, filename):
     return clean_df
 
 
-# Initialize completely empty — do NOT show details of pre-existing CSV
-clear_dataset()
+# Automatically restore active dataset on server startup
+ensure_dataset_loaded()
 

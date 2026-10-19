@@ -621,6 +621,56 @@ def _format_employee_card(emp):
     )
 
 
+def _all_departments_response():
+    """
+    Generate comprehensive breakdown across all active departments in the dataset.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        dl.ensure_dataset_loaded()
+        if dl.df is None or len(dl.df) == 0:
+            return {
+                "response": "⚠️ No employee dataset is currently loaded.",
+                "suggestions": ["How do I upload a CSV?"],
+            }
+
+    dept_data = ae.get_department_data()
+    if not dept_data:
+        return {"response": "No department data found in this dataset.", "suggestions": []}
+
+    rows = []
+    for d in dept_data:
+        tier = "🔴 High Risk" if d["rate"] >= 20 else "🟡 Moderate" if d["rate"] >= 15 else "🟢 Stable"
+        active_count = d["total"] - d["attrition"]
+        rows.append(
+            f"| **{d['label']}** | {d['total']:,} | {d['attrition']:,} | {active_count:,} | **{d['rate']}%** | {tier} |"
+        )
+
+    table_md = (
+        "| Department | Total Staff | Departed | Retained | Attrition Rate | Flight Risk Tier |\n"
+        "| :--- | :---: | :---: | :---: | :---: | :--- |\n"
+        + "\n".join(rows)
+    )
+
+    highest = dept_data[0]
+    total_depts = len(dept_data)
+
+    return {
+        "response": (
+            f"🏢 **Workforce Breakdown Across All {total_depts} Departments**\n\n"
+            f"{table_md}\n\n"
+            f"📌 **Key Observations:**\n"
+            f"• **Highest Flight Risk:** **{highest['label']}** leads turnover at **{highest['rate']}%**.\n"
+            f"• Ask *\"Analyze {highest['label']} department\"* for deep dive metrics or *\"Compare {dept_data[0]['label']} vs {dept_data[1]['label'] if len(dept_data) > 1 else dept_data[0]['label']}\"*."
+        ),
+        "data": {"departments": dept_data},
+        "suggestions": [
+            f"Analyze {highest['label']} department",
+            f"Compare {dept_data[0]['label']} vs {dept_data[1]['label']}" if len(dept_data) > 1 else "Rank all departments by attrition rate",
+            "Who are the top high-risk active employees?",
+        ],
+    }
+
+
 def _department_deep_dive_response(dept_name):
     """
     Generate complete, robust department analysis from active dataset.
@@ -1201,7 +1251,21 @@ def _match_intent(message, session):
         if len(depts) >= 2:
             return "department_comparison", {"dept1": depts[0], "dept2": depts[1]}
 
-    # 4. Department deep dive
+    # 4. Department analysis & breakdown
+    all_dept_triggers = [
+        "all department", "all departments", "list department", "list departments",
+        "tell me all department", "tell me all departments", "what department",
+        "what departments", "which department", "which departments",
+        "show department", "show departments", "every department", "department list",
+        "departments list", "tell me department", "tell me departments",
+        "departments overview", "view departments"
+    ]
+    if any(t in msg for t in all_dept_triggers):
+        specific_dept = _extract_department(message)
+        if specific_dept and not any(k in msg for k in ["all", "list", "every", "each"]):
+            return "department_deep_dive", {"dept": specific_dept}
+        return "all_departments", {}
+
     dept_triggers = ["analyze", "how is", "deep dive", "tell me about", "department", "dept"]
     if any(t in msg for t in dept_triggers):
         dept = _extract_department(message)
@@ -1285,22 +1349,24 @@ def process_message(user_message, session_id="default"):
     session = get_session(session_id)
     session["history"].append(user_message)
 
-    # Missing dataset guard
+    # Missing dataset guard - attempt automatic restore from active disk pointer or uploads
     if dl.df is None or len(dl.df) == 0:
-        return {
-            "intent": "no_dataset",
-            "response": (
-                "⚠️ **No employee dataset is currently loaded.**\n\n"
-                "Please upload an employee CSV file on the dashboard using the upload zone or 'Upload CSV' button. "
-                "Once uploaded, I will instantly analyze the cohort and answer questions about flight risks, department rates, and retention strategies!"
-            ),
-            "suggestions": [
-                "How does employee attrition analysis work?",
-                "What CSV columns should my dataset include?",
-                "How do I upload an employee dataset?",
-            ],
-            "source": "rule_based_fallback",
-        }
+        dl.ensure_dataset_loaded()
+        if dl.df is None or len(dl.df) == 0:
+            return {
+                "intent": "no_dataset",
+                "response": (
+                    "⚠️ **No employee dataset is currently loaded.**\n\n"
+                    "Please upload an employee CSV file on the dashboard using the upload zone or 'Upload CSV' button. "
+                    "Once uploaded, I will instantly analyze the cohort and answer questions about flight risks, department rates, and retention strategies!"
+                ),
+                "suggestions": [
+                    "How does employee attrition analysis work?",
+                    "What CSV columns should my dataset include?",
+                    "How do I upload an employee dataset?",
+                ],
+                "source": "rule_based_fallback",
+            }
 
     # Intent matching
     intent, intent_params = _match_intent(user_message, session)
@@ -1384,7 +1450,28 @@ def process_message(user_message, session_id="default"):
             "source": "rule_based_fallback",
         }
 
-    # ── 2. Department Deep Dive ─────────────────────────────────
+    # ── 2. All Departments Breakdown ────────────────────────────
+    if intent == "all_departments":
+        session["last_intent"] = "all_departments"
+        dept_res = _all_departments_response()
+        gemini_reply = _call_gemini_api(user_message, custom_context=dept_res["response"])
+        if gemini_reply:
+            return {
+                "intent": "all_departments",
+                "response": gemini_reply,
+                "data": dept_res.get("data"),
+                "suggestions": dept_res.get("suggestions"),
+                "source": "gemini_ai",
+            }
+        return {
+            "intent": "all_departments",
+            "response": dept_res["response"],
+            "data": dept_res.get("data"),
+            "suggestions": dept_res.get("suggestions"),
+            "source": "rule_based_fallback",
+        }
+
+    # ── 3. Department Deep Dive ─────────────────────────────────
     if intent == "department_deep_dive":
         dept_name = intent_params.get("dept") or _extract_department(user_message)
         if dept_name:
