@@ -109,4 +109,41 @@ export async function loadSampleDataset() {
   return await res.json();
 }
 
+export async function fetchDatasetProfile() {
+  const res = await fetch(`${API_BASE_URL}/api/dataset/profile`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+export async function fetchDocuments() {
+  const res = await fetch(`${API_BASE_URL}/api/documents`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+export async function uploadDocument(file, title = '', category = 'Policy') {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (title) formData.append('title', title);
+  if (category) formData.append('category', category);
+
+  const res = await fetch(`${API_BASE_URL}/api/documents/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || `HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+export async function deleteDocument(docId) {
+  const res = await fetch(`${API_BASE_URL}/api/documents/${docId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
 

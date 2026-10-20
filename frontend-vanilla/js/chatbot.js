@@ -104,6 +104,8 @@ const Chatbot = {
     await this.sendMessage(message);
   },
 
+  sessionId: 'vanilla_' + Math.random().toString(36).substring(2, 9),
+
   async sendMessage(message) {
     if (this.isSending) return;
     this.isSending = true;
@@ -118,15 +120,20 @@ const Chatbot = {
     const typingId = this.showTypingIndicator();
 
     try {
-      // 3. Call backend endpoint
-      const result = await API.sendChatMessage(message);
+      // 3. Call backend endpoint with sessionId
+      const result = await API.sendChatMessage(message, this.sessionId);
 
       // 4. Remove typing indicator
       this.removeTypingIndicator(typingId);
 
       // 5. Add bot response
-      const source = result.source === 'gemini_ai' ? 'Gemini AI' : 'HR Analytics';
-      this.appendBotMessage(result.response, source);
+      let source = 'HR Analytics';
+      if (result.source === 'gemini_ai') source = 'Gemini AI';
+      else if (result.source === 'hybrid_rag') source = 'Hybrid RAG + Gemini';
+      else if (result.source === 'deterministic_rag') source = 'HR Policy Base';
+      else if (result.source === 'deterministic_analytics') source = 'Full-Dataset Engine';
+
+      this.appendBotMessage(result.response, source, result.citations);
 
       // 6. Update suggestions if available
       if (result.suggestions && result.suggestions.length > 0) {
@@ -166,13 +173,30 @@ const Chatbot = {
     this.scrollToBottom();
   },
 
-  appendBotMessage(markdownText, sourceLabel) {
+  appendBotMessage(markdownText, sourceLabel, citations = []) {
     const messages = document.getElementById('chatMessages');
     if (!messages) return;
 
     const time = this.getCurrentTime();
     const formattedHtml = this.formatMarkdown(markdownText);
     const sourceBadge = sourceLabel ? `<span style="font-size: 0.65rem; color: var(--accent-cyan); margin-left: 6px; font-weight: 600;">• ${sourceLabel}</span>` : '';
+
+    let citationsHtml = '';
+    if (citations && citations.length > 0) {
+      const items = citations.map(c => `
+        <div style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; padding: 4px 8px; margin-top: 4px; font-size: 0.7rem;">
+          <div style="font-weight: 600; color: #fff;">📄 ${this.escapeHtml(c.title || '')} <span style="color: var(--accent-cyan); font-size: 0.65rem;">${this.escapeHtml(c.section || '')}</span></div>
+          ${c.content ? `<div style="color: #94a3b8; font-size: 0.65rem; font-style: italic; margin-top: 2px;">"${this.escapeHtml(c.content.substring(0, 100))}..."</div>` : ''}
+        </div>
+      `).join('');
+
+      citationsHtml = `
+        <div style="margin-top: 8px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.15);">
+          <div style="font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Document References (${citations.length})</div>
+          ${items}
+        </div>
+      `;
+    }
 
     const msgDiv = document.createElement('div');
     msgDiv.className = 'chat-message bot';
@@ -181,7 +205,10 @@ const Chatbot = {
         <i data-lucide="bot" style="width: 14px; height: 14px; color: #fff;"></i>
       </div>
       <div>
-        <div class="chat-bubble">${formattedHtml}</div>
+        <div class="chat-bubble">
+          ${formattedHtml}
+          ${citationsHtml}
+        </div>
         <div class="chat-time">${time} ${sourceBadge}</div>
       </div>
     `;

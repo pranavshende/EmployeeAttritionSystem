@@ -31,7 +31,7 @@ def save_dataset_in_background(df, filename: str, total: int, attr_count: int, r
                 )
             )
         except Exception as e:
-            logger.error(f"Failed to persist dataset to Supabase: {e}", exc_info=True)
+            logger.warning(f"Could not persist dataset to Supabase PostgreSQL: {e}")
 
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()

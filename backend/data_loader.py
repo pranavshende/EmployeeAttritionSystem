@@ -6,6 +6,7 @@ Supports automatic column detection, normalization, and on-the-spot band computa
 
 import os
 import logging
+import hashlib
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -26,7 +27,9 @@ ATTRITION_COUNT = 0
 RETENTION_COUNT = 0
 ATTRITION_RATE = 0.0
 DATASET_NAME = None
-DATASET_INFO = {"has_dataset": False}
+DATASET_VERSION = None
+DATASET_PROFILE = None
+DATASET_INFO = {"has_dataset": False, "version": None}
 
 
 def _find_column_by_aliases(columns, aliases):
@@ -228,18 +231,149 @@ def _normalize_and_preprocess(raw_df, dataset_name="WA_Fn-UseC_-HR-Employee-Attr
     return clean_df
 
 
+def compute_dataset_profile(dataframe, dataset_name):
+    """
+    Dynamically profile the complete active dataset:
+    - Schema types, missing counts, uniqueness
+    - Numerical distributions (min, max, mean, median, std, quartiles, outliers)
+    - Categorical frequency & unique values
+    - Duplicate detection & identifier validation
+    - Data quality summary
+    """
+    if dataframe is None or len(dataframe) == 0:
+        return {
+            "has_dataset": False,
+            "version": None,
+            "total_rows": 0,
+            "total_columns": 0,
+            "columns": {},
+            "numerical_columns": [],
+            "categorical_columns": [],
+            "identifier_columns": [],
+            "target_column": None,
+            "duplicates_count": 0,
+            "missing_cells_count": 0,
+            "overall_missing_pct": 0.0,
+        }
+
+    total_rows = len(dataframe)
+    total_cols = len(dataframe.columns)
+    col_profiles = {}
+    num_cols = []
+    cat_cols = []
+    id_cols = []
+    total_missing_cells = 0
+
+    for col in dataframe.columns:
+        s = dataframe[col]
+        missing_count = int(s.isna().sum())
+        total_missing_cells += missing_count
+        missing_pct = round(missing_count / total_rows * 100, 2)
+        unique_count = int(s.nunique(dropna=True))
+
+        is_num = pd.api.types.is_numeric_dtype(s)
+        is_bool = pd.api.types.is_bool_dtype(s)
+
+        profile = {
+            "name": col,
+            "dtype": str(s.dtype),
+            "missing_count": missing_count,
+            "missing_pct": missing_pct,
+            "unique_count": unique_count,
+            "is_numeric": bool(is_num and not is_bool),
+            "is_boolean": bool(is_bool),
+        }
+
+        # Check for potential identifier column (100% unique or ID pattern)
+        if unique_count == total_rows and total_rows > 1:
+            id_cols.append(col)
+            profile["is_identifier"] = True
+        elif col.lower() in ("employeenumber", "employeeid", "id", "emp_id", "empnumber"):
+            id_cols.append(col)
+            profile["is_identifier"] = True
+        else:
+            profile["is_identifier"] = False
+
+        if is_num and not is_bool:
+            num_cols.append(col)
+            valid_s = s.dropna()
+            if len(valid_s) > 0:
+                q1 = float(valid_s.quantile(0.25))
+                q3 = float(valid_s.quantile(0.75))
+                iqr = q3 - q1
+                outliers = int(((valid_s < (q1 - 1.5 * iqr)) | (valid_s > (q3 + 1.5 * iqr))).sum())
+                profile.update({
+                    "min": round(float(valid_s.min()), 2),
+                    "max": round(float(valid_s.max()), 2),
+                    "mean": round(float(valid_s.mean()), 2),
+                    "median": round(float(valid_s.median()), 2),
+                    "std": round(float(valid_s.std()), 2) if len(valid_s) > 1 else 0.0,
+                    "q25": round(q1, 2),
+                    "q75": round(q3, 2),
+                    "outliers_count": outliers,
+                })
+        else:
+            cat_cols.append(col)
+            val_counts = s.value_counts(dropna=True).head(5)
+            profile["top_values"] = [
+                {"value": str(k), "count": int(v), "pct": round(int(v) / total_rows * 100, 1)}
+                for k, v in val_counts.items()
+            ]
+
+        col_profiles[col] = profile
+
+    duplicate_rows = int(dataframe.duplicated().sum())
+    total_cells = total_rows * total_cols
+    overall_missing_pct = round(total_missing_cells / total_cells * 100, 2) if total_cells > 0 else 0.0
+
+    # Fingerprint hash
+    sample_str = str(dataframe.head(3).to_dict()) + str(dataframe.tail(3).to_dict())
+    hash_input = f"{dataset_name}_{total_rows}_{sorted(dataframe.columns)}_{sample_str}"
+    version_hash = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()[:10]
+
+    health_score = round(max(0.0, min(100.0, 100 - (overall_missing_pct * 2 + (duplicate_rows > 0) * 10))), 1)
+
+    return {
+        "has_dataset": True,
+        "version": version_hash,
+        "dataset_name": dataset_name,
+        "total_rows": total_rows,
+        "total_columns": total_cols,
+        "row_count": total_rows,
+        "columns_count": total_cols,
+        "columns": col_profiles,
+        "numerical_columns": num_cols,
+        "categorical_columns": cat_cols,
+        "identifier_columns": list(set(id_cols)),
+        "target_column": "AttritionFlag" if "AttritionFlag" in dataframe.columns else None,
+        "duplicates_count": duplicate_rows,
+        "missing_cells_count": total_missing_cells,
+        "overall_missing_pct": overall_missing_pct,
+        "data_quality": {
+            "overall_health_score": health_score,
+            "duplicate_rows": duplicate_rows,
+            "overall_missing_pct": overall_missing_pct,
+        },
+    }
+
+
 def _update_state(new_df, dataset_name, is_custom=True, detected_target="Attrition"):
     """Update global module variables."""
-    global df, TOTAL_EMPLOYEES, ATTRITION_COUNT, RETENTION_COUNT, ATTRITION_RATE, DATASET_NAME, DATASET_INFO
+    global df, TOTAL_EMPLOYEES, ATTRITION_COUNT, RETENTION_COUNT, ATTRITION_RATE, DATASET_NAME, DATASET_VERSION, DATASET_PROFILE, DATASET_INFO
     df = new_df
     TOTAL_EMPLOYEES = len(df) if df is not None else 0
     ATTRITION_COUNT = int(df["AttritionFlag"].sum()) if (df is not None and "AttritionFlag" in df.columns) else 0
     RETENTION_COUNT = TOTAL_EMPLOYEES - ATTRITION_COUNT
     ATTRITION_RATE = round(ATTRITION_COUNT / TOTAL_EMPLOYEES * 100, 2) if TOTAL_EMPLOYEES > 0 else 0.0
     DATASET_NAME = dataset_name
+
+    DATASET_PROFILE = compute_dataset_profile(df, dataset_name)
+    DATASET_VERSION = DATASET_PROFILE.get("version")
+
     DATASET_INFO = {
         "has_dataset": True if df is not None and len(df) > 0 else False,
         "dataset_name": dataset_name,
+        "version": DATASET_VERSION,
         "is_custom": is_custom,
         "total_employees": TOTAL_EMPLOYEES,
         "attrition_count": ATTRITION_COUNT,
@@ -248,6 +382,8 @@ def _update_state(new_df, dataset_name, is_custom=True, detected_target="Attriti
         "columns_count": len(df.columns) if df is not None else 0,
         "detected_target": detected_target,
         "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "duplicates_count": DATASET_PROFILE.get("duplicates_count", 0),
+        "overall_missing_pct": DATASET_PROFILE.get("overall_missing_pct", 0.0),
     }
 
 
@@ -313,16 +449,19 @@ def ensure_dataset_loaded():
 
 def clear_dataset():
     """Clear active dataset and reset to uninitialized state."""
-    global df, TOTAL_EMPLOYEES, ATTRITION_COUNT, RETENTION_COUNT, ATTRITION_RATE, DATASET_NAME, DATASET_INFO
+    global df, TOTAL_EMPLOYEES, ATTRITION_COUNT, RETENTION_COUNT, ATTRITION_RATE, DATASET_NAME, DATASET_VERSION, DATASET_PROFILE, DATASET_INFO
     df = None
     TOTAL_EMPLOYEES = 0
     ATTRITION_COUNT = 0
     RETENTION_COUNT = 0
     ATTRITION_RATE = 0.0
     DATASET_NAME = None
+    DATASET_VERSION = None
+    DATASET_PROFILE = None
     DATASET_INFO = {
         "has_dataset": False,
         "dataset_name": None,
+        "version": None,
         "is_custom": False,
         "total_employees": 0,
         "attrition_count": 0,
@@ -331,6 +470,33 @@ def clear_dataset():
         "columns_count": 0,
     }
     _clear_active_dataset_pointer()
+
+
+def get_dataset_version():
+    """Return active dataset version fingerprint."""
+    global DATASET_VERSION
+    return DATASET_VERSION
+
+
+def get_data():
+    """Return active DataFrame singleton, ensuring it is loaded."""
+    global df
+    if df is None:
+        return ensure_dataset_loaded()
+    return df
+
+
+def get_dataframe():
+    """Alias for get_data()."""
+    return get_data()
+
+
+def get_dataset_profile():
+    """Return comprehensive active dataset schema and distribution profile."""
+    global DATASET_PROFILE, df, DATASET_NAME
+    if DATASET_PROFILE is None and df is not None and len(df) > 0:
+        DATASET_PROFILE = compute_dataset_profile(df, DATASET_NAME or "Active Dataset")
+    return DATASET_PROFILE
 
 
 def load_default_dataset():

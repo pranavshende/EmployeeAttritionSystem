@@ -1001,6 +1001,104 @@ body {
   box-shadow: 0 4px 10px rgba(16, 185, 129, 0.3);
 }
 
+/* ── Citations & RAG Badges ──────────────────────── */
+.chat-citations {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.citation-header {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.citation-item {
+  background: var(--bg-page-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 0.72rem;
+  transition: all 0.2s ease;
+}
+
+.citation-item:hover {
+  background: #f1f5f9;
+  border-color: var(--primary-300);
+}
+
+.citation-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.citation-tag {
+  background: var(--primary-100);
+  color: var(--primary-800);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.citation-snippet {
+  margin-top: 4px;
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  font-style: italic;
+}
+
+.chat-bubble-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.chat-action-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.68rem;
+  transition: all 0.2s ease;
+}
+
+.chat-action-btn:hover {
+  color: var(--primary-600);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.version-pill {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
 /* ── Responsive ────────────────────────────────────── */
 @media (max-width: 1024px) {
   .charts-grid {
@@ -1115,6 +1213,7 @@ body {
 .text-gradient-emerald {
   background: linear-gradient(135deg, #059669 0%, #10b981 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 

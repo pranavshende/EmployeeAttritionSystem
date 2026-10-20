@@ -38,13 +38,32 @@ const API = {
     return await res.json();
   },
 
-  async sendChatMessage(message) {
+  async sendChatMessage(message, sessionId = 'default') {
     const res = await fetch(`${this.baseUrl}/api/chatbot/message`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, session_id: sessionId }),
+    });
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  },
+
+  async getDocuments() {
+    const res = await fetch(`${this.baseUrl}/api/documents`);
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  },
+
+  async uploadDocument(file, title = '', category = 'Policy') {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (title) formData.append('title', title);
+    if (category) formData.append('category', category);
+    const res = await fetch(`${this.baseUrl}/api/documents/upload`, {
+      method: 'POST',
+      body: formData,
     });
     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
     return await res.json();

@@ -4,9 +4,12 @@ Pre-computes all dashboard KPIs, chart data, factor analysis, and high-risk prof
 from the loaded DataFrame. All computations happen at import time for fast API responses.
 """
 
+import logging
 import numpy as np
 import pandas as pd
 from . import data_loader as dl
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_int(val, default=0):
@@ -741,4 +744,694 @@ def get_sample_employee_ids(limit=5):
             "attrition": str(r.get("Attrition", "No")),
         })
     return samples
+
+
+# ─────────────────────────────────────────────────────────────
+#  Full-Dataset Generic Analytical Intelligence Engine
+# ─────────────────────────────────────────────────────────────
+
+def resolve_column_name(col_name):
+    """Resolve user or query column name to actual DataFrame column using case-insensitive and alias matching."""
+    if dl.df is None or not col_name:
+        return None
+    raw = str(col_name).strip()
+    # Direct match
+    if raw in dl.df.columns:
+        return raw
+
+    cleaned = raw.lower().replace(" ", "").replace("_", "").replace("-", "")
+    for col in dl.df.columns:
+        if str(col).strip().lower().replace(" ", "").replace("_", "").replace("-", "") == cleaned:
+            return col
+
+    # Common semantic aliases
+    alias_map = {
+        "attrition": "AttritionFlag",
+        "attritionrate": "AttritionFlag",
+        "turnover": "AttritionFlag",
+        "churn": "AttritionFlag",
+        "left": "AttritionFlag",
+        "salary": "MonthlyIncome",
+        "income": "MonthlyIncome",
+        "pay": "MonthlyIncome",
+        "compensation": "MonthlyIncome",
+        "monthlyincome": "MonthlyIncome",
+        "role": "JobRole",
+        "job": "JobRole",
+        "jobrole": "JobRole",
+        "position": "JobRole",
+        "title": "JobRole",
+        "dept": "Department",
+        "department": "Department",
+        "division": "Department",
+        "team": "Department",
+        "ot": "OverTime",
+        "overtime": "OverTime",
+        "extra_hours": "OverTime",
+        "tenure": "YearsAtCompany",
+        "yearsatcompany": "YearsAtCompany",
+        "experience": "YearsAtCompany",
+        "commute": "DistanceFromHome",
+        "distance": "DistanceFromHome",
+        "distancefromhome": "DistanceFromHome",
+        "jobsatisfaction": "JobSatisfaction",
+        "satisfaction": "JobSatisfaction",
+        "environmentsatisfaction": "EnvironmentSatisfaction",
+        "envsatisfaction": "EnvironmentSatisfaction",
+        "worklifebalance": "WorkLifeBalance",
+        "wlb": "WorkLifeBalance",
+        "stock": "StockOptionLevel",
+        "stockoptions": "StockOptionLevel",
+        "stockoptionlevel": "StockOptionLevel",
+        "risk": "RiskScore",
+        "riskscore": "RiskScore",
+        "risklevel": "RiskLevel",
+        "age": "Age",
+        "gender": "Gender",
+        "sex": "Gender",
+        "marital": "MaritalStatus",
+        "maritalstatus": "MaritalStatus",
+        "travel": "BusinessTravel",
+        "businesstravel": "BusinessTravel",
+    }
+    if cleaned in alias_map:
+        mapped = alias_map[cleaned]
+        if mapped in dl.df.columns:
+            return mapped
+    return None
+
+
+def run_aggregation(column, metric="mean"):
+    """
+    Execute full-dataset aggregation on a column.
+    Supported metrics: mean, median, sum, std, min, max, count, nunique, attrition_rate.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {"error": "No active dataset loaded."}
+
+    actual_col = resolve_column_name(column)
+    if not actual_col:
+        return {"error": f"Column '{column}' not found in active dataset."}
+
+    s = dl.df[actual_col]
+    total_records = len(dl.df)
+
+    metric_lower = str(metric).lower().strip()
+
+    if metric_lower == "attrition_rate":
+        if "AttritionFlag" not in dl.df.columns:
+            return {"error": "Target attrition column not found."}
+        rate = round(float(dl.df["AttritionFlag"].mean() * 100), 2)
+        count = int(dl.df["AttritionFlag"].sum())
+        return {
+            "operation": "aggregation",
+            "column": actual_col,
+            "metric": "attrition_rate",
+            "value": rate,
+            "attrition_count": count,
+            "total_records": total_records,
+            "formatted": f"{rate}% ({count:,} / {total_records:,} departed)",
+        }
+
+    if metric_lower in ("count", "records"):
+        val = int(s.count())
+        return {"operation": "aggregation", "column": actual_col, "metric": "count", "value": val, "total_records": total_records}
+
+    if metric_lower in ("nunique", "unique_count", "distinct"):
+        val = int(s.nunique())
+        return {"operation": "aggregation", "column": actual_col, "metric": "nunique", "value": val, "total_records": total_records}
+
+    # Numerical metrics
+    if not pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+        # Fallback to mode or count for non-numeric
+        top_val = str(s.mode().iloc[0]) if len(s.dropna()) > 0 else "N/A"
+        return {
+            "operation": "aggregation",
+            "column": actual_col,
+            "metric": "mode",
+            "value": top_val,
+            "note": f"Column '{actual_col}' is categorical. Most frequent value returned.",
+            "total_records": total_records,
+        }
+
+    s_clean = s.dropna()
+    if len(s_clean) == 0:
+        return {"error": f"No valid values in column '{actual_col}'."}
+
+    val = 0.0
+    if metric_lower in ("mean", "average", "avg"):
+        val = round(float(s_clean.mean()), 2)
+    elif metric_lower in ("median", "med"):
+        val = round(float(s_clean.median()), 2)
+    elif metric_lower in ("sum", "total"):
+        val = round(float(s_clean.sum()), 2)
+    elif metric_lower in ("min", "minimum"):
+        val = round(float(s_clean.min()), 2)
+    elif metric_lower in ("max", "maximum"):
+        val = round(float(s_clean.max()), 2)
+    elif metric_lower in ("std", "stdev", "standard_deviation"):
+        val = round(float(s_clean.std()), 2)
+    else:
+        val = round(float(s_clean.mean()), 2)
+        metric_lower = "mean"
+
+    return {
+        "operation": "aggregation",
+        "column": actual_col,
+        "metric": metric_lower,
+        "value": val,
+        "total_records": total_records,
+        "total_rows_evaluated": total_records,
+        "formatted": f"{val:,.2f}" if abs(val) >= 100 else f"{val}",
+    }
+
+
+def run_groupby(group_col, metric_col=None, agg="count", sort_desc=True, limit=20, **kwargs):
+    """
+    Execute full-dataset Group-By aggregation with verified attrition rates and metrics.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {"error": "No active dataset loaded."}
+
+    if metric_col is None and "metric_column" in kwargs:
+        metric_col = kwargs["metric_column"]
+    if "agg_func" in kwargs:
+        agg = kwargs["agg_func"]
+
+    actual_group_col = resolve_column_name(group_col)
+    if not actual_group_col:
+        return {"error": f"Grouping column '{group_col}' not found in active dataset."}
+
+    actual_metric_col = resolve_column_name(metric_col) if metric_col else None
+    has_attr = "AttritionFlag" in dl.df.columns
+
+    groups = []
+    total_records = len(dl.df)
+
+    grouped = dl.df.groupby(actual_group_col, observed=True)
+
+    for group_val, grp_df in grouped:
+        headcount = len(grp_df)
+        pct_of_total = round(headcount / total_records * 100, 1)
+
+        attr_count = int(grp_df["AttritionFlag"].sum()) if has_attr else 0
+        attr_rate = round(attr_count / headcount * 100, 1) if (has_attr and headcount > 0) else 0.0
+
+        item = {
+            "group": str(group_val),
+            "headcount": headcount,
+            "row_count": headcount,
+            "headcount_pct": pct_of_total,
+            "attrition_count": attr_count,
+            "attrition_rate": attr_rate,
+        }
+
+        # Optional extra metric aggregation
+        if actual_metric_col and actual_metric_col in grp_df.columns:
+            m_series = grp_df[actual_metric_col].dropna()
+            if len(m_series) > 0 and pd.api.types.is_numeric_dtype(m_series):
+                agg_type = str(agg).lower()
+                if agg_type in ("mean", "average", "avg"):
+                    item[f"{actual_metric_col}_mean"] = round(float(m_series.mean()), 2)
+                elif agg_type == "median":
+                    item[f"{actual_metric_col}_median"] = round(float(m_series.median()), 2)
+                elif agg_type == "sum":
+                    item[f"{actual_metric_col}_sum"] = round(float(m_series.sum()), 2)
+                elif agg_type in ("min", "max"):
+                    item[f"{actual_metric_col}_{agg_type}"] = round(float(getattr(m_series, agg_type)()), 2)
+
+        groups.append(item)
+
+    # Sort
+    sort_key = "attrition_rate" if (has_attr and (agg == "attrition_rate" or not actual_metric_col)) else "headcount"
+    if actual_metric_col:
+        for k in groups[0].keys():
+            if k.startswith(actual_metric_col):
+                sort_key = k
+                break
+
+    groups.sort(key=lambda x: x.get(sort_key, 0), reverse=sort_desc)
+
+    return {
+        "operation": "groupby",
+        "group_column": actual_group_col,
+        "metric_column": actual_metric_col,
+        "total_groups": len(groups),
+        "total_records": total_records,
+        "results": groups[:limit],
+        "groups": groups[:limit],
+    }
+
+
+def run_filter(conditions, limit=20):
+    """
+    Execute full-dataset multi-condition boolean filtering.
+    conditions: list of {"column": str, "operator": str, "value": Any}
+    Operators: ==, !=, >, <, >=, <=, in, contains.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {"error": "No active dataset loaded."}
+
+    filtered_df = dl.df.copy()
+    total_records = len(dl.df)
+    applied_rules = []
+
+    for cond in conditions:
+        col = resolve_column_name(cond.get("column"))
+        op = cond.get("operator", "==").strip()
+        val = cond.get("value")
+
+        if not col or col not in filtered_df.columns:
+            continue
+
+        try:
+            s = filtered_df[col]
+            if op == "==":
+                if isinstance(val, (int, float)) and pd.api.types.is_numeric_dtype(s):
+                    filtered_df = filtered_df[s == float(val)]
+                else:
+                    filtered_df = filtered_df[s.astype(str).str.lower() == str(val).lower().strip()]
+            elif op == "!=":
+                if isinstance(val, (int, float)) and pd.api.types.is_numeric_dtype(s):
+                    filtered_df = filtered_df[s != float(val)]
+                else:
+                    filtered_df = filtered_df[s.astype(str).str.lower() != str(val).lower().strip()]
+            elif op == ">":
+                filtered_df = filtered_df[pd.to_numeric(s, errors="coerce") > float(val)]
+            elif op == "<":
+                filtered_df = filtered_df[pd.to_numeric(s, errors="coerce") < float(val)]
+            elif op == ">=":
+                filtered_df = filtered_df[pd.to_numeric(s, errors="coerce") >= float(val)]
+            elif op == "<=":
+                filtered_df = filtered_df[pd.to_numeric(s, errors="coerce") <= float(val)]
+            elif op == "in" and isinstance(val, (list, tuple)):
+                clean_vals = [str(v).lower().strip() for v in val]
+                filtered_df = filtered_df[s.astype(str).str.lower().isin(clean_vals)]
+            elif op == "contains":
+                filtered_df = filtered_df[s.astype(str).str.lower().str.contains(str(val).lower().strip(), na=False)]
+
+            applied_rules.append(f"{col} {op} {val}")
+        except Exception as e:
+            logger.warning(f"Error applying filter rule {cond}: {e}")
+
+    matched_count = len(filtered_df)
+    matched_pct = round(matched_count / total_records * 100, 1) if total_records > 0 else 0.0
+
+    has_attr = "AttritionFlag" in filtered_df.columns
+    attr_count = int(filtered_df["AttritionFlag"].sum()) if has_attr else 0
+    attr_rate = round(attr_count / matched_count * 100, 1) if (has_attr and matched_count > 0) else 0.0
+
+    # Summary metrics for matched cohort
+    summary = {
+        "matched_count": matched_count,
+        "matching_count": matched_count,
+        "total_records": total_records,
+        "matched_pct": matched_pct,
+        "percentage_of_dataset": matched_pct,
+        "attrition_count": attr_count,
+        "attrition_rate": attr_rate,
+        "applied_rules": applied_rules,
+    }
+
+    if "MonthlyIncome" in filtered_df.columns and matched_count > 0:
+        summary["avg_income"] = round(float(filtered_df["MonthlyIncome"].mean()), 0)
+    if "YearsAtCompany" in filtered_df.columns and matched_count > 0:
+        summary["avg_tenure"] = round(float(filtered_df["YearsAtCompany"].mean()), 1)
+    if "Age" in filtered_df.columns and matched_count > 0:
+        summary["avg_age"] = round(float(filtered_df["Age"].mean()), 1)
+
+    # Sample rows (up to limit)
+    id_col = "EmployeeNumber" if "EmployeeNumber" in filtered_df.columns else "EmployeeID" if "EmployeeID" in filtered_df.columns else None
+    samples = []
+    display_cols = [c for c in [id_col, "Department", "JobRole", "MonthlyIncome", "OverTime", "YearsAtCompany", "RiskLevel", "Attrition"] if c and c in filtered_df.columns]
+    for _, r in filtered_df.head(limit).iterrows():
+        samples.append({c: r.get(c) for c in display_cols})
+
+    summary["samples"] = samples
+    summary["operation"] = "filter"
+    return summary
+
+
+def run_correlation(target_col="AttritionFlag", top_n=10, col1=None, col2=None):
+    """
+    Compute Pearson correlation across numerical columns.
+    If col1 and col2 given (or first two args are column strings): correlation between those two columns.
+    Else: correlation of all numerical features with target_col.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {"error": "No active dataset loaded."}
+
+    # Handle run_correlation("Age", "MonthlyIncome") positional call
+    if isinstance(top_n, str) and not col1 and not col2:
+        col1 = target_col
+        col2 = top_n
+        top_n = 10
+
+    # Case 1: Pairwise correlation between two specific columns
+    if col1 and col2:
+        c1 = resolve_column_name(col1)
+        c2 = resolve_column_name(col2)
+        if not c1 or not c2:
+            return {"error": f"Columns '{col1}' or '{col2}' could not be resolved."}
+
+        s1 = pd.to_numeric(dl.df[c1], errors="coerce")
+        s2 = pd.to_numeric(dl.df[c2], errors="coerce")
+        valid = dl.df[[c1, c2]].dropna()
+        if len(valid) < 2:
+            return {"error": "Not enough valid numerical pairs to calculate correlation."}
+
+        corr = round(float(valid[c1].astype(float).corr(valid[c2].astype(float))), 3)
+        interpretation = "strong positive" if corr >= 0.5 else "moderate positive" if corr >= 0.2 else "negligible" if corr > -0.2 else "moderate negative" if corr > -0.5 else "strong negative"
+
+        return {
+            "operation": "pairwise_correlation",
+            "column_1": c1,
+            "column_2": c2,
+            "correlation": corr,
+            "correlation_coefficient": corr,
+            "interpretation": f"A {interpretation} association (r = {corr}). Note: Correlation does not imply causation.",
+            "sample_size": len(valid),
+        }
+
+    # Case 2: Correlation of all numeric columns with target attrition
+    actual_target = resolve_column_name(target_col) or "AttritionFlag"
+    if actual_target not in dl.df.columns:
+        return {"error": f"Target column '{target_col}' not found."}
+
+    target_series = dl.df[actual_target].astype(float)
+    numeric_df = dl.df.select_dtypes(include=[np.number, "bool"]).copy()
+
+    corrs = []
+    for c in numeric_df.columns:
+        if c == actual_target or c.lower() in ("employeenumber", "employeeid", "id"):
+            continue
+        valid_mask = numeric_df[c].notna() & target_series.notna()
+        if valid_mask.sum() > 10 and numeric_df.loc[valid_mask, c].nunique() > 1 and target_series.loc[valid_mask].nunique() > 1:
+            try:
+                val = float(numeric_df.loc[valid_mask, c].astype(float).corr(target_series.loc[valid_mask]))
+                if not np.isnan(val):
+                    corrs.append({
+                        "column": c,
+                        "correlation": round(val, 3),
+                        "abs_correlation": round(abs(val), 3),
+                        "direction": "Increases Turnover" if val > 0 else "Decreases Turnover",
+                    })
+            except Exception:
+                pass
+
+    corrs.sort(key=lambda x: x["abs_correlation"], reverse=True)
+
+    return {
+        "operation": "target_correlation",
+        "target_column": actual_target,
+        "total_numerical_features": len(corrs),
+        "top_correlated": corrs[:top_n],
+        "note": "Pearson linear correlation coefficients. Statistical association does not prove causality.",
+    }
+
+
+def run_crosstab(row_col, col_col):
+    """
+    Generate contingency table / cross-tabulation with headcount and attrition rates.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {"error": "No active dataset loaded."}
+
+    r_col = resolve_column_name(row_col)
+    c_col = resolve_column_name(col_col)
+
+    if not r_col or not c_col:
+        return {"error": f"Could not resolve columns '{row_col}' or '{col_col}'."}
+
+    has_attr = "AttritionFlag" in dl.df.columns
+    total_records = len(dl.df)
+
+    ct_count = pd.crosstab(dl.df[r_col], dl.df[c_col])
+
+    table = []
+    for r_idx in ct_count.index:
+        row_dict = {"row_category": str(r_idx), "columns": {}}
+        for c_idx in ct_count.columns:
+            cell_count = int(ct_count.loc[r_idx, c_idx])
+            cell_data = {"count": cell_count}
+            if has_attr and cell_count > 0:
+                mask = (dl.df[r_col] == r_idx) & (dl.df[c_col] == c_idx)
+                att_c = int(dl.df.loc[mask, "AttritionFlag"].sum())
+                att_r = round(att_c / cell_count * 100, 1)
+                cell_data["attrition_count"] = att_c
+                cell_data["attrition_rate"] = att_r
+            row_dict["columns"][str(c_idx)] = cell_data
+        table.append(row_dict)
+
+    return {
+        "operation": "crosstab",
+        "row_column": r_col,
+        "col_column": c_col,
+        "row_values": [str(x) for x in ct_count.index],
+        "col_values": [str(x) for x in ct_count.columns],
+        "matrix": table,
+        "total_records": total_records,
+    }
+
+
+def run_distribution(column, bins=5):
+    """
+    Compute complete numerical distribution: min, max, mean, median, std, quartiles, outliers, and histogram bins.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {"error": "No active dataset loaded."}
+
+    col = resolve_column_name(column)
+    if not col:
+        return {"error": f"Column '{column}' could not be resolved."}
+
+    s = dl.df[col].dropna()
+    if not pd.api.types.is_numeric_dtype(s):
+        # Categorical distribution
+        counts = s.value_counts()
+        total = len(s)
+        items = [{"value": str(k), "count": int(v), "pct": round(int(v) / total * 100, 1)} for k, v in counts.items()]
+        return {
+            "operation": "categorical_distribution",
+            "column": col,
+            "total_records": total,
+            "unique_categories": len(counts),
+            "distribution": items[:15],
+        }
+
+    q1 = float(s.quantile(0.25))
+    q3 = float(s.quantile(0.75))
+    iqr = q3 - q1
+    outliers = int(((s < (q1 - 1.5 * iqr)) | (s > (q3 + 1.5 * iqr))).sum())
+
+    # Histogram binning
+    cuts, bin_edges = pd.cut(s, bins=bins, retbins=True)
+    bin_counts = cuts.value_counts(sort=False)
+    has_attr = "AttritionFlag" in dl.df.columns
+
+    bucket_results = []
+    for interval, count in bin_counts.items():
+        low = round(float(interval.left), 1)
+        high = round(float(interval.right), 1)
+        b_dict = {
+            "range": f"{low} - {high}",
+            "count": int(count),
+            "pct": round(int(count) / len(s) * 100, 1) if len(s) > 0 else 0.0,
+        }
+        if has_attr and int(count) > 0:
+            mask = (dl.df[col] >= interval.left) & (dl.df[col] <= interval.right)
+            att_c = int(dl.df.loc[mask, "AttritionFlag"].sum())
+            b_dict["attrition_rate"] = round(att_c / int(count) * 100, 1)
+        bucket_results.append(b_dict)
+
+    return {
+        "operation": "numerical_distribution",
+        "column": col,
+        "total_records": len(s),
+        "count": len(s),
+        "min": round(float(s.min()), 2),
+        "max": round(float(s.max()), 2),
+        "mean": round(float(s.mean()), 2),
+        "median": round(float(s.median()), 2),
+        "std": round(float(s.std()), 2) if len(s) > 1 else 0.0,
+        "q25": round(q1, 2),
+        "q75": round(q3, 2),
+        "quartiles": {"q1": round(q1, 2), "q3": round(q3, 2)},
+        "outliers_count": outliers,
+        "histogram_buckets": bucket_results,
+    }
+
+
+def run_data_quality_audit():
+    """
+    Generate dataset-wide data quality audit:
+    - Missing value percentages
+    - Duplicate records and IDs
+    - Constant zero-variance columns
+    - Outlier detection summary
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {"error": "No active dataset loaded."}
+
+    total_rows = len(dl.df)
+    total_cols = len(dl.df.columns)
+    duplicate_rows = int(dl.df.duplicated().sum())
+
+    missing_cols = []
+    constant_cols = []
+    outlier_summary = []
+
+    for c in dl.df.columns:
+        s = dl.df[c]
+        null_count = int(s.isna().sum())
+        if null_count > 0:
+            missing_cols.append({
+                "column": c,
+                "missing_count": null_count,
+                "missing_pct": round(null_count / total_rows * 100, 2),
+            })
+
+        if s.nunique(dropna=True) <= 1:
+            constant_cols.append(c)
+
+        if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+            clean = s.dropna()
+            if len(clean) > 0:
+                q1 = float(clean.quantile(0.25))
+                q3 = float(clean.quantile(0.75))
+                iqr = q3 - q1
+                outliers = int(((clean < (q1 - 1.5 * iqr)) | (clean > (q3 + 1.5 * iqr))).sum())
+                if outliers > 0:
+                    outlier_summary.append({
+                        "column": c,
+                        "outlier_count": outliers,
+                        "outlier_pct": round(outliers / total_rows * 100, 2),
+                    })
+
+    # Identifier validation
+    id_col = "EmployeeNumber" if "EmployeeNumber" in dl.df.columns else "EmployeeID" if "EmployeeID" in dl.df.columns else None
+    duplicate_ids = 0
+    if id_col:
+        duplicate_ids = int(dl.df[id_col].duplicated().sum())
+
+    health = round(max(0.0, min(100.0, 100 - (len(missing_cols) * 2 + (duplicate_rows > 0) * 10 + len(constant_cols) * 2))), 1)
+
+    return {
+        "operation": "data_quality_audit",
+        "dataset_name": dl.DATASET_NAME or "Active Dataset",
+        "dataset_version": dl.get_dataset_version(),
+        "total_rows": total_rows,
+        "total_columns": total_cols,
+        "duplicate_rows_count": duplicate_rows,
+        "duplicate_rows": duplicate_rows,
+        "duplicate_employee_ids": duplicate_ids,
+        "columns_with_missing_values": missing_cols,
+        "missing_summary": missing_cols,
+        "constant_zero_variance_columns": constant_cols,
+        "numerical_columns_with_outliers": outlier_summary,
+        "health_score": health,
+        "overall_health_score": health,
+    }
+
+
+def run_cohort_comparison(cohort_col, group1=None, group2=None):
+    """
+    Execute full-dataset side-by-side comparison between two groups in cohort_col.
+    """
+    if dl.df is None or len(dl.df) == 0:
+        return {"error": "No active dataset loaded."}
+
+    actual_col = resolve_column_name(cohort_col)
+    if not actual_col:
+        return {"error": f"Cohort column '{cohort_col}' could not be resolved."}
+
+    unique_vals = [str(x) for x in dl.df[actual_col].dropna().unique()]
+    if len(unique_vals) < 2:
+        return {"error": f"Column '{actual_col}' only has {len(unique_vals)} unique group(s). At least 2 required for comparison."}
+
+    # Resolve group names
+    def match_val(g_name):
+        if not g_name:
+            return None
+        cleaned = str(g_name).strip().lower()
+        for u in unique_vals:
+            if u.lower() == cleaned:
+                return u
+        for u in unique_vals:
+            if cleaned in u.lower():
+                return u
+        return None
+
+    g1_val = match_val(group1) or unique_vals[0]
+    g2_val = match_val(group2) or (unique_vals[1] if unique_vals[1] != g1_val else unique_vals[0])
+
+    df1 = dl.df[dl.df[actual_col].astype(str) == g1_val]
+    df2 = dl.df[dl.df[actual_col].astype(str) == g2_val]
+
+    def cohort_stats(c_df, label):
+        n = len(c_df)
+        has_attr = "AttritionFlag" in c_df.columns
+        att_c = int(c_df["AttritionFlag"].sum()) if has_attr else 0
+        att_r = round(att_c / n * 100, 1) if (has_attr and n > 0) else 0.0
+
+        res = {
+            "group": label,
+            "headcount": n,
+            "attrition_count": att_c,
+            "attrition_rate": att_r,
+        }
+        if "MonthlyIncome" in c_df.columns and n > 0:
+            res["avg_salary"] = round(float(c_df["MonthlyIncome"].mean()), 0)
+        if "YearsAtCompany" in c_df.columns and n > 0:
+            res["avg_tenure"] = round(float(c_df["YearsAtCompany"].mean()), 1)
+        if "Age" in c_df.columns and n > 0:
+            res["avg_age"] = round(float(c_df["Age"].mean()), 1)
+        if "OvertimeFlag" in c_df.columns and n > 0:
+            res["overtime_rate"] = round(float(c_df["OvertimeFlag"].mean() * 100), 1)
+        if "JobSatisfaction" in c_df.columns and n > 0:
+            res["avg_satisfaction"] = round(float(c_df["JobSatisfaction"].mean()), 2)
+        if "RiskScore" in c_df.columns and n > 0:
+            res["avg_risk_score"] = round(float(c_df["RiskScore"].mean()), 2)
+
+        return res
+
+    stats1 = cohort_stats(df1, g1_val)
+    stats2 = cohort_stats(df2, g2_val)
+
+    # Differential calculation
+    rate_diff = round(stats1.get("attrition_rate", 0) - stats2.get("attrition_rate", 0), 1)
+    salary_diff = round(stats1.get("avg_salary", 0) - stats2.get("avg_salary", 0), 0)
+
+    return {
+        "operation": "cohort_comparison",
+        "cohort_column": actual_col,
+        "group_1": stats1,
+        "group_2": stats2,
+        "rate_difference_percentage_points": rate_diff,
+        "salary_difference": salary_diff,
+        "summary": f"{g1_val} has an attrition rate of {stats1.get('attrition_rate')}% vs {g2_val} at {stats2.get('attrition_rate')}% (Δ {rate_diff:+} pp).",
+    }
+
+
+def run_top_n(group_col, metric="attrition_rate", ascending=False, n=10):
+    """
+    Return top or bottom N groups ranked by metric.
+    """
+    grp_res = run_groupby(group_col, sort_desc=not ascending, limit=100)
+    if "error" in grp_res:
+        return grp_res
+
+    results = grp_res.get("results", [])
+    if metric == "headcount":
+        results.sort(key=lambda x: x["headcount"], reverse=not ascending)
+    else:
+        results.sort(key=lambda x: x["attrition_rate"], reverse=not ascending)
+
+    return {
+        "operation": "top_n",
+        "group_column": grp_res["group_column"],
+        "ranking_metric": metric,
+        "order": "ascending (lowest)" if ascending else "descending (highest)",
+        "results": results[:n],
+    }
 

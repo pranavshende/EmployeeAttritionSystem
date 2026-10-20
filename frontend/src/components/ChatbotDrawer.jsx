@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, X, RefreshCw } from 'lucide-react';
+import { Bot, Send, X, RefreshCw, Copy, Check, BookOpen } from 'lucide-react';
 import { sendChatMessage, fetchChatbotSuggestions } from '../api';
 
 const NO_DATASET_SUGGESTIONS = [
@@ -14,11 +14,18 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
   const [isOpen, setIsOpen] = useState(false);
   const [inputMessage, setInputMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [copiedId, setCopiedId] = useState(null);
   const [suggestions, setSuggestions] = useState(
     datasetInfo.suggested_questions && datasetInfo.suggested_questions.length > 0
       ? datasetInfo.suggested_questions
       : NO_DATASET_SUGGESTIONS
   );
+
+  const copyMessage = (id, text) => {
+    navigator.clipboard?.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
   // Unique session ID for persistent conversational context
   const sessionIdRef = useRef('session_' + Math.random().toString(36).substring(2, 9));
@@ -122,7 +129,11 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
       // 2. Call backend with persistent session ID
       const res = await sendChatMessage(text, sessionIdRef.current);
       const botTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const source = res.source === 'gemini_ai' ? 'Gemini AI' : 'HR Analytics Engine';
+      let source = 'HR Analytics Engine';
+      if (res.source === 'gemini_ai') source = 'Gemini AI';
+      else if (res.source === 'hybrid_rag') source = 'Hybrid RAG + Gemini';
+      else if (res.source === 'deterministic_rag') source = 'Company HR Policies';
+      else if (res.source === 'deterministic_analytics') source = 'Full-Dataset Engine';
 
       // 3. Add bot message
       setMessages((prev) => [
@@ -133,6 +144,9 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
           source,
           time: botTime,
           text: res.response || "I've processed your query.",
+          citations: res.citations || [],
+          evidence: res.evidence || null,
+          dataset_version: res.dataset_version || null,
         },
       ]);
 
@@ -274,7 +288,14 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
                 <Bot size={20} />
               </div>
               <div>
-                <div className="drawer-bot-title">AttritionAI</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div className="drawer-bot-title">AttritionAI</div>
+                  {datasetInfo.version && (
+                    <span className="version-pill" title="Dataset schema fingerprint">
+                      v:{datasetInfo.version.substring(0, 6)}
+                    </span>
+                  )}
+                </div>
                 <div className="drawer-bot-status">
                   <span className="white-dot"></span>
                   <span>{hasDataset ? `Online • ${datasetInfo.dataset_name || 'Active Cohort'}` : 'Online • Ready for CSV'}</span>
@@ -297,12 +318,48 @@ export default function ChatbotDrawer({ datasetInfo = {} }) {
               <div key={m.id} className={`chat-msg ${m.sender}`}>
                 <div className="bubble">
                   {renderFormattedText(m.text)}
-                  <div className="bubble-meta">
-                    {m.time}
-                    {m.source && (
-                      <span style={{ marginLeft: '6px', fontWeight: 600, color: 'var(--primary-600)' }}>
-                        • {m.source}
-                      </span>
+
+                  {/* Document Citations Block */}
+                  {m.citations && m.citations.length > 0 && (
+                    <div className="chat-citations">
+                      <div className="citation-header">
+                        <BookOpen size={12} />
+                        <span>Document References ({m.citations.length})</span>
+                      </div>
+                      {m.citations.map((c, cIdx) => (
+                        <div key={cIdx} className="citation-item">
+                          <div className="citation-title-row">
+                            <span>{c.title}</span>
+                            {c.section && <span className="citation-tag">{c.section}</span>}
+                          </div>
+                          {c.content && (
+                            <div className="citation-snippet">
+                              "{c.content.length > 130 ? c.content.substring(0, 130) + '...' : c.content}"
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="bubble-meta" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      {m.time}
+                      {m.source && (
+                        <span style={{ marginLeft: '6px', fontWeight: 600, color: 'var(--primary-600)' }}>
+                          • {m.source}
+                        </span>
+                      )}
+                    </div>
+                    {m.sender === 'bot' && (
+                      <button
+                        className="chat-action-btn"
+                        onClick={() => copyMessage(m.id, m.text)}
+                        title="Copy response markdown"
+                      >
+                        {copiedId === m.id ? <Check size={11} style={{ color: 'var(--primary-600)' }} /> : <Copy size={11} />}
+                        <span>{copiedId === m.id ? 'Copied' : 'Copy'}</span>
+                      </button>
                     )}
                   </div>
                 </div>

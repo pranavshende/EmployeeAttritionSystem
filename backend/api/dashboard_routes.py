@@ -160,6 +160,17 @@ def dataset_info():
     return jsonify(info)
 
 
+@dashboard_bp.route("/api/dataset/profile", methods=["GET"])
+def dataset_profile():
+    """Return comprehensive dynamic dataset schema and distribution profile."""
+    from .. import data_loader as dl
+    prof = dl.get_dataset_profile() or {}
+    resp = dict(prof)
+    resp["version"] = dl.get_dataset_version()
+    resp["profile"] = prof
+    return jsonify(resp)
+
+
 @dashboard_bp.route("/api/dataset/upload", methods=["POST"])
 def upload_dataset():
     from .. import data_loader as dl

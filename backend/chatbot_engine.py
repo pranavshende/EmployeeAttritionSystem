@@ -4,9 +4,12 @@ import urllib.request
 import logging
 import re
 import pandas as pd
+from typing import Optional, Dict, Any, List
 
 from . import data_loader as dl
 from . import analytics_engine as ae
+from . import query_planner as qp
+from . import rag_engine as rag
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +57,16 @@ def _get_gemini_api_key():
 
 
 # ─────────────────────────────────────────────────────────────
-#  Conversational Context Session Store
+#  Conversational Context Session Store with Dataset Version Tracking
 # ─────────────────────────────────────────────────────────────
 
 _sessions = {}
 
 
 def get_session(session_id="default"):
-    """Get or create a conversational context session dictionary."""
+    """Get or create a conversational context session dictionary with dataset version validation."""
+    global _sessions
+    current_ver = dl.get_dataset_version()
     if session_id not in _sessions:
         _sessions[session_id] = {
             "last_employee_id": None,
@@ -70,8 +75,22 @@ def get_session(session_id="default"):
             "last_role": None,
             "last_intent": None,
             "history": [],
+            "dataset_version": current_ver,
         }
-    return _sessions[session_id]
+
+    session = _sessions[session_id]
+
+    # Invalidate stale entity references if dataset changed during session
+    if session.get("dataset_version") and session["dataset_version"] != current_ver:
+        session["last_employee_id"] = None
+        session["last_employee"] = None
+        session["last_department"] = None
+        session["last_role"] = None
+        session["dataset_version"] = current_ver
+    elif session.get("dataset_version") is None and current_ver:
+        session["dataset_version"] = current_ver
+
+    return session
 
 
 def clear_sessions():
@@ -1333,70 +1352,95 @@ def _match_intent(message, session):
 
 
 # ─────────────────────────────────────────────────────────────
-#  Main Process Message Entry Point
+#  Response Formatter & Unified Contract
+# ─────────────────────────────────────────────────────────────
+
+def _build_response_payload(
+    intent: str,
+    response_text: str,
+    source: str = "deterministic_analytics",
+    data: Optional[Dict[str, Any]] = None,
+    operations: Optional[List[Dict[str, Any]]] = None,
+    evidence: Optional[Dict[str, Any]] = None,
+    citations: Optional[List[Dict[str, Any]]] = None,
+    suggestions: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Return unified, backward-compatible response object containing evidence and citations."""
+    return {
+        "intent": intent,
+        "response": response_text,
+        "answer": response_text,
+        "reply": response_text,
+        "source": source,
+        "dataset_name": dl.DATASET_NAME or "Active Dataset",
+        "dataset_version": dl.get_dataset_version(),
+        "data": data or {},
+        "operations": operations or [],
+        "evidence": evidence or {},
+        "citations": citations or [],
+        "suggestions": (suggestions or generate_dataset_questions())[:4],
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+#  Main Process Message Entry Point (Hybrid RAG + Analytics)
 # ─────────────────────────────────────────────────────────────
 
 def process_message(user_message, session_id="default"):
     """
     Main entry point: process a user message and return a chatbot response.
     Features:
-      - Modular rule-based intent detection engine (100% self-sufficient offline).
-      - Seamless Google Gemini Generative AI enhancement when API key is available.
-      - Support for alphanumeric employee ID lookups, department deep dives, comparisons, rankings.
-      - Conversational context preservation across query turns.
-      - Validates queries and handles missing data gracefully.
+      - Full-dataset safe analytical query planner (filtering, aggregations, distributions, correlations).
+      - Selective hybrid RAG for HR handbooks, policies, and playbooks.
+      - Alphanumeric employee ID lookups with flight risk vs historical exit distinction.
+      - Conversational context preservation and dataset-change reference invalidation.
+      - 100% offline resilient fallback when Gemini is unavailable.
     """
     session = get_session(session_id)
     session["history"].append(user_message)
+    msg_clean = user_message.strip()
+    msg_lower = msg_clean.lower()
 
-    # Missing dataset guard - attempt automatic restore from active disk pointer or uploads
+    # Guard: Missing dataset check
     if dl.df is None or len(dl.df) == 0:
         dl.ensure_dataset_loaded()
         if dl.df is None or len(dl.df) == 0:
-            return {
-                "intent": "no_dataset",
-                "response": (
+            return _build_response_payload(
+                intent="no_dataset",
+                response_text=(
                     "⚠️ **No employee dataset is currently loaded.**\n\n"
                     "Please upload an employee CSV file on the dashboard using the upload zone or 'Upload CSV' button. "
-                    "Once uploaded, I will instantly analyze the cohort and answer questions about flight risks, department rates, and retention strategies!"
+                    "Once uploaded, I will dynamically profile the cohort and answer questions across flight risks, correlations, distributions, and policies!"
                 ),
-                "suggestions": [
+                source="rule_based_fallback",
+                suggestions=[
                     "How does employee attrition analysis work?",
                     "What CSV columns should my dataset include?",
                     "How do I upload an employee dataset?",
                 ],
-                "source": "rule_based_fallback",
-            }
+            )
 
-    # Intent matching
-    intent, intent_params = _match_intent(user_message, session)
+    # ── 1. Individual Employee Lookup / Follow-Up & Pronoun Resolution ──
+    emp_id = _extract_employee_id(user_message)
+    pronouns = ["they", "them", "he", "she", "him", "her", "their", "theirs", "this employee", "that employee", "his"]
+    if not emp_id and any(re.search(r"\b" + re.escape(p) + r"\b", msg_lower) for p in pronouns):
+        emp_id = session.get("last_employee_id")
 
-    # ── 1. Individual Employee Lookup / Follow-up ──────────────
-    if intent in ("employee_lookup", "employee_followup"):
-        emp_id = intent_params.get("emp_id") or _extract_employee_id(user_message) or session.get("last_employee_id")
-        emp = ae.get_employee_by_id(emp_id) if emp_id else None
-
+    if emp_id:
+        emp = ae.get_employee_by_id(emp_id)
         if not emp:
             samples = ae.get_sample_employee_ids(limit=4)
-            sample_str = ""
-            if samples:
-                sample_lines = [f"• **#{s['id']}** ({s['role']}, {s['department']})" for s in samples]
-                sample_str = "\n\n**Valid sample employee IDs in this dataset:**\n" + "\n".join(sample_lines)
-
-            return {
-                "intent": "employee_lookup",
-                "response": (
+            sample_lines = [f"• **#{s['id']}** ({s['role']}, {s['department']})" for s in samples]
+            sample_str = f"\n\n**Valid sample employee IDs in this dataset:**\n" + "\n".join(sample_lines) if sample_lines else ""
+            return _build_response_payload(
+                intent="employee_lookup",
+                response_text=(
                     f"🔍 **Employee ID `#{emp_id}` not found** in the active dataset (`{dl.DATASET_NAME or 'uploaded cohort'}`).\n\n"
                     f"There are **{dl.TOTAL_EMPLOYEES:,}** total employees in this cohort.{sample_str}\n\n"
                     f"Please verify the employee ID or check the High-Risk Watchlist table on your dashboard."
                 ),
-                "suggestions": [
-                    f"Tell me about employee #{samples[0]['id']}" if samples else "Who is likely to leave?",
-                    "Who are the top high-risk active employees?",
-                    "Rank all departments by attrition rate",
-                ],
-                "source": "rule_based_fallback",
-            }
+                source="rule_based_fallback",
+            )
 
         # Update session context
         session["last_employee_id"] = emp["employee_number"]
@@ -1406,8 +1450,6 @@ def process_message(user_message, session_id="default"):
         session["last_intent"] = "employee_lookup"
 
         fallback_card = _format_employee_card(emp)
-
-        # Grounding for Gemini
         emp_context = (
             f"[SPECIFIC EMPLOYEE RECORD FROM VERIFIED DATASET]\n"
             f"Employee #{emp['employee_number']}:\n"
@@ -1425,145 +1467,232 @@ def process_message(user_message, session_id="default"):
         )
 
         gemini_reply = _call_gemini_api(user_message, custom_context=emp_context)
-        if gemini_reply:
-            return {
-                "intent": "employee_lookup",
-                "response": gemini_reply,
-                "data": {"employee": emp},
-                "suggestions": [
-                    f"Why is #{emp['employee_number']} at risk?",
-                    f"Analyze {emp['department']} department",
-                    "Who are the top high-risk active employees?",
-                ],
-                "source": "gemini_ai",
-            }
+        return _build_response_payload(
+            intent="employee_lookup",
+            response_text=gemini_reply or fallback_card,
+            source="gemini_ai" if gemini_reply else "rule_based_fallback",
+            data={"employee": emp},
+        )
 
-        return {
-            "intent": "employee_lookup",
-            "response": fallback_card,
-            "data": {"employee": emp},
-            "suggestions": [
-                f"Why is #{emp['employee_number']} at risk?",
-                f"Analyze {emp['department']} department",
-                "Who are the top high-risk active employees?",
-            ],
-            "source": "rule_based_fallback",
-        }
+    # ── 2. Check Document Knowledge & Selective Hybrid RAG ─────
+    rag_keywords = [
+        "policy", "policies", "handbook", "guideline", "guidelines", "procedure", "procedures",
+        "playbook", "comp-time", "compensatory", "comp time", "overtime limit", "overtime pay",
+        "stay interview", "5-day", "equity tier", "stock option tier", "vesting", "severance",
+        "leave", "remote work", "work from home", "burnout intervention", "etl pipeline", "handbooks"
+    ]
+    is_policy_query = any(k in msg_lower for k in rag_keywords)
+    rag_hits = rag.search_documents(user_message, top_k=3, min_score=0.10 if is_policy_query else 0.25)
 
-    # ── 2. All Departments Breakdown ────────────────────────────
+    if rag_hits:
+        # Check if question also requests active dataset metrics (Combined Multi-Step Flow)
+        data_keywords = [
+            "how many", "count", "active", "sales", "engineering", "customer support", "r&d",
+            "research", "department", "rate", "turnover", "attrition", "cohort", "in this dataset",
+            "current", "employees", "staff", "who are"
+        ]
+        is_combined = any(k in msg_lower for k in data_keywords)
+
+        if is_combined:
+            # Execute analytical lookup for department or cohort
+            dept = _extract_department(user_message)
+            analytical_evidence = {}
+            if dept:
+                dept_res = _department_deep_dive_response(dept)
+                dept_stat_str = f"[CURRENT DATASET ANALYTICS FOR {dept.upper()}]\n" + dept_res.get("response", "")
+                analytical_evidence = dept_res.get("data", {})
+            else:
+                kpis = ae.get_kpis()
+                dept_stat_str = (
+                    f"[DATASET COHORT METRICS]\n"
+                    f"Total Workforce: {kpis.get('total_employees', 0):,}\n"
+                    f"Overall Attrition Rate: {kpis.get('attrition_rate', 0)}%\n"
+                    f"Overtime Attrition Rate: {kpis.get('overtime_attrition_rate', 0)}% vs Non-Overtime: {kpis.get('no_overtime_attrition_rate', 0)}%"
+                )
+                analytical_evidence = kpis
+
+            rag_context = "\n\n".join([f"SOURCE CITATION: {h['citation']}\n{h['content']}" for h in rag_hits])
+            combined_grounding = (
+                f"{dept_stat_str}\n\n"
+                f"[OFFICIAL HR POLICIES & PLAYBOOKS]\n{rag_context}\n\n"
+                f"INSTRUCTION: Synthesize the verified dataset analytics with company policy rules. "
+                f"1. State the exact computed dataset numbers.\n"
+                f"2. Explain the governing policy or retention playbook guidance.\n"
+                f"3. Cite the documents accurately using their [Title, Section] citation.\n"
+                f"4. Clearly distinguish computed facts from retention recommendations."
+            )
+
+            gemini_reply = _call_gemini_api(user_message, custom_context=combined_grounding)
+            if not gemini_reply:
+                citations_md = "\n\n".join([
+                    f"📄 **{h['title']}** — *{h.get('section', 'General')}*\n"
+                    f"> {h['content']}\n"
+                    f"*Source: {h['citation']}*"
+                    for h in rag_hits
+                ])
+                combined_fallback = f"{dept_stat_str}\n\n📚 **Applicable Policy Guidance & Citations:**\n\n{citations_md}"
+                return _build_response_payload(
+                    intent="hybrid_analytics_and_rag",
+                    response_text=combined_fallback,
+                    source="deterministic_engine",
+                    evidence=analytical_evidence,
+                    citations=rag_hits,
+                )
+
+            return _build_response_payload(
+                intent="hybrid_analytics_and_rag",
+                response_text=gemini_reply,
+                source="hybrid_rag",
+                evidence=analytical_evidence,
+                citations=rag_hits,
+            )
+
+        elif is_policy_query or (rag_hits and rag_hits[0]["score"] >= 0.28):
+            # Pure RAG Knowledge Flow
+            rag_context = "\n\n".join([f"SOURCE CITATION: {h['citation']}\n{h['content']}" for h in rag_hits])
+            rag_prompt = (
+                f"[OFFICIAL HR DOCUMENT PASSAGES]\n{rag_context}\n\n"
+                f"INSTRUCTION: Answer the question accurately based on the retrieved document passages. "
+                f"Always cite the document title and section using the provided citation format. "
+                f"If the documents do not cover an aspect, honestly state that limitation."
+            )
+            gemini_reply = _call_gemini_api(user_message, custom_context=rag_prompt)
+            if not gemini_reply:
+                citations_md = "\n\n".join([
+                    f"📄 **{h['title']}** — *{h.get('section', 'General')}*\n"
+                    f"> {h['content']}\n"
+                    f"*Source: {h['citation']}*"
+                    for h in rag_hits
+                ])
+                fallback_rag = f"📖 **Company HR Policy Documentation:**\n\n{citations_md}"
+                return _build_response_payload(
+                    intent="document_rag",
+                    response_text=fallback_rag,
+                    source="deterministic_rag",
+                    citations=rag_hits,
+                )
+
+            return _build_response_payload(
+                intent="document_rag",
+                response_text=gemini_reply,
+                source="hybrid_rag",
+                citations=rag_hits,
+            )
+
+    # ── 3. Full-Dataset Analytical Query Planner ─────────────
+    plan = qp.compile_rule_based_plan(user_message)
+    if not plan and any(k in msg_lower for k in [
+        "missing", "null", "correlation", "correlate", "average", "mean", "median", "quantile", "percentile",
+        "distribution", "spread", "crosstab", "cross tab", "filter", "how many employees", "data quality", "describe dataset"
+    ]):
+        plan = qp.compile_llm_plan(user_message, lambda p: _call_gemini_api(p))
+
+    if plan:
+        is_valid, err_msg, sanitized_plan = qp.validate_plan(plan)
+        if is_valid:
+            plan_res = qp.execute_plan(sanitized_plan)
+            evidence_md = qp.format_plan_results_as_markdown(plan_res, sanitized_plan)
+
+            # Gemini enhancement
+            gemini_context = (
+                f"[FULL DATASET DETERMINISTIC CALCULATION]\n{evidence_md}\n\n"
+                f"INSTRUCTION: Synthesize these exact calculations for the user. "
+                f"Retain the tables and numbers precisely without altering counts or percentages. "
+                f"Highlight actionable workforce insights and business implications."
+            )
+            gemini_reply = _call_gemini_api(user_message, custom_context=gemini_context)
+            final_text = gemini_reply if gemini_reply else evidence_md
+            source = "gemini_ai" if gemini_reply else "deterministic_analytics"
+
+            session["last_intent"] = f"analytics_{sanitized_plan.get('operation')}"
+            return _build_response_payload(
+                intent=f"analytics_{sanitized_plan.get('operation')}",
+                response_text=final_text,
+                source=source,
+                operations=[sanitized_plan],
+                evidence=plan_res,
+            )
+
+    # ── 4. Standard Keyword / Intent Matching ──────────────────
+    intent, intent_params = _match_intent(user_message, session)
+
     if intent == "all_departments":
         session["last_intent"] = "all_departments"
         dept_res = _all_departments_response()
         gemini_reply = _call_gemini_api(user_message, custom_context=dept_res["response"])
-        if gemini_reply:
-            return {
-                "intent": "all_departments",
-                "response": gemini_reply,
-                "data": dept_res.get("data"),
-                "suggestions": dept_res.get("suggestions"),
-                "source": "gemini_ai",
-            }
-        return {
-            "intent": "all_departments",
-            "response": dept_res["response"],
-            "data": dept_res.get("data"),
-            "suggestions": dept_res.get("suggestions"),
-            "source": "rule_based_fallback",
-        }
+        return _build_response_payload(
+            intent="all_departments",
+            response_text=gemini_reply or dept_res["response"],
+            source="gemini_ai" if gemini_reply else "rule_based_fallback",
+            data=dept_res.get("data"),
+            suggestions=dept_res.get("suggestions"),
+        )
 
-    # ── 3. Department Deep Dive ─────────────────────────────────
     if intent == "department_deep_dive":
         dept_name = intent_params.get("dept") or _extract_department(user_message)
         if dept_name:
             session["last_department"] = dept_name
             session["last_intent"] = "department_deep_dive"
-
             dept_res = _department_deep_dive_response(dept_name)
-
-            # Optional Gemini enhancement
             gemini_reply = _call_gemini_api(user_message, custom_context=dept_res["response"])
-            if gemini_reply:
-                return {
-                    "intent": "department_deep_dive",
-                    "response": gemini_reply,
-                    "data": dept_res.get("data"),
-                    "suggestions": dept_res.get("suggestions"),
-                    "source": "gemini_ai",
-                }
+            return _build_response_payload(
+                intent="department_deep_dive",
+                response_text=gemini_reply or dept_res["response"],
+                source="gemini_ai" if gemini_reply else "rule_based_fallback",
+                data=dept_res.get("data"),
+                suggestions=dept_res.get("suggestions"),
+            )
 
-            return {
-                "intent": "department_deep_dive",
-                "response": dept_res["response"],
-                "data": dept_res.get("data"),
-                "suggestions": dept_res.get("suggestions"),
-                "source": "rule_based_fallback",
-            }
-
-    # ── 3. Department Comparison ───────────────────────────────
     if intent == "department_comparison":
         dept1 = intent_params.get("dept1")
         dept2 = intent_params.get("dept2")
         if dept1 and dept2:
             session["last_department"] = dept1
             session["last_intent"] = "department_comparison"
-
             comp_res = _department_comparison_response(dept1, dept2)
-
             gemini_reply = _call_gemini_api(user_message, custom_context=comp_res["response"])
-            if gemini_reply:
-                return {
-                    "intent": "department_comparison",
-                    "response": gemini_reply,
-                    "data": comp_res.get("data"),
-                    "suggestions": comp_res.get("suggestions"),
-                    "source": "gemini_ai",
-                }
+            return _build_response_payload(
+                intent="department_comparison",
+                response_text=gemini_reply or comp_res["response"],
+                source="gemini_ai" if gemini_reply else "rule_based_fallback",
+                data=comp_res.get("data"),
+                suggestions=comp_res.get("suggestions"),
+            )
 
-            return {
-                "intent": "department_comparison",
-                "response": comp_res["response"],
-                "data": comp_res.get("data"),
-                "suggestions": comp_res.get("suggestions"),
-                "source": "rule_based_fallback",
-            }
-
-    # ── 4. Rankings ─────────────────────────────────────────────
     if intent in ("rankings_departments", "rankings_roles"):
         entity = "role" if intent == "rankings_roles" else "department"
         session["last_intent"] = intent
         rank_res = _rankings_response(entity_type=entity)
-        return {
-            "intent": intent,
-            "response": rank_res["response"],
-            "data": rank_res.get("data"),
-            "suggestions": rank_res.get("suggestions"),
-            "source": "rule_based_fallback",
-        }
+        return _build_response_payload(
+            intent=intent,
+            response_text=rank_res["response"],
+            source="rule_based_fallback",
+            data=rank_res.get("data"),
+            suggestions=rank_res.get("suggestions"),
+        )
 
-    # ── 5. Historical Attrition vs Future Flight Risk ───────────
     if intent == "historical_attrition":
         session["last_intent"] = intent
         hist_res = _historical_attrition_response()
-        return {
-            "intent": intent,
-            "response": hist_res["response"],
-            "data": hist_res.get("data"),
-            "suggestions": hist_res.get("suggestions"),
-            "source": "rule_based_fallback",
-        }
+        return _build_response_payload(
+            intent=intent,
+            response_text=hist_res["response"],
+            source="rule_based_fallback",
+            data=hist_res.get("data"),
+            suggestions=hist_res.get("suggestions"),
+        )
 
     if intent == "who_likely_leave":
         session["last_intent"] = intent
         who_res = _who_likely_leave_response()
-        return {
-            "intent": intent,
-            "response": who_res["response"],
-            "data": who_res.get("data"),
-            "suggestions": who_res.get("suggestions"),
-            "source": "rule_based_fallback",
-        }
+        return _build_response_payload(
+            intent=intent,
+            response_text=who_res["response"],
+            source="rule_based_fallback",
+            data=who_res.get("data"),
+            suggestions=who_res.get("suggestions"),
+        )
 
-    # ── 6. Other Core Analytical Intents ───────────────────────
     generators = {
         "why_leave": _why_leave_response,
         "overtime_impact": _overtime_response,
@@ -1577,67 +1706,66 @@ def process_message(user_message, session_id="default"):
     if intent in generators:
         session["last_intent"] = intent
         res = generators[intent]()
-        return {
-            "intent": intent,
-            "response": res["response"],
-            "data": res.get("data"),
-            "suggestions": res.get("suggestions"),
-            "source": "rule_based_fallback",
-        }
+        return _build_response_payload(
+            intent=intent,
+            response_text=res["response"],
+            source="rule_based_fallback",
+            data=res.get("data"),
+            suggestions=res.get("suggestions"),
+        )
 
-    # ── 7. Greetings & Help ────────────────────────────────────
     if intent == "greeting":
         kpis = ae.get_kpis()
         dynamic_q = generate_dataset_questions()
-        return {
-            "intent": "greeting",
-            "response": (
-                f"👋 Hello! I'm **AttritionAI**, your HR workforce analytics partner.\n\n"
+        return _build_response_payload(
+            intent="greeting",
+            response_text=(
+                f"👋 Hello! I'm **AttritionAI**, your full-dataset workforce analytics & HR knowledge partner.\n\n"
                 f"I am actively analyzing `{dl.DATASET_NAME or 'Active Dataset'}` "
-                f"({kpis['total_employees']:,} employees, {kpis['attrition_rate']}% attrition).\n\n"
-                f"What would you like to explore?"
+                f"({kpis.get('total_employees', 0):,} employees, {kpis.get('attrition_rate', 0)}% attrition).\n\n"
+                f"You can ask about:\n"
+                f"• **Dataset Analytics:** Missing values, distributions, correlations, or multi-filter queries.\n"
+                f"• **Employee Profiles:** In-depth flight risk reviews by employee ID.\n"
+                f"• **HR Policies & Playbooks:** Company guidelines on overtime, retention, equity, and remote work."
             ),
-            "suggestions": dynamic_q[:4],
-            "source": "rule_based_fallback",
-        }
+            source="rule_based_fallback",
+            suggestions=dynamic_q[:4],
+        )
 
     if intent == "help":
         dynamic_q = generate_dataset_questions()
-        return {
-            "intent": "help",
-            "response": (
-                "📋 **Here is what I can analyze dynamically for you:**\n\n"
-                "• **Employee Profile:** e.g. *\"Tell me about employee #E02744\"*\n"
-                "• **Department Analysis:** e.g. *\"Analyze Sales department\"*\n"
-                "• **Department Comparison:** e.g. *\"Compare Sales vs R&D\"*\n"
-                "• **Rankings & Tables:** e.g. *\"Rank all departments by attrition rate\"*\n"
-                "• **Active Flight Risk:** e.g. *\"Who are the top high-risk active employees?\"*\n"
-                "• **Historical Attrition:** e.g. *\"Who has left the company?\"*\n"
-                "• **Risk Factors:** e.g. *\"How does OverTime impact turnover?\"*\n"
-                "• **Retention Plan:** e.g. *\"What recommendations do you have?\"*"
+        return _build_response_payload(
+            intent="help",
+            response_text=(
+                "📋 **Capabilities of AttritionAI:**\n\n"
+                "• **Full-Dataset Analytics:** *\"Which columns have missing values?\"*, *\"Correlation between salary and tenure\"*, *\"Salary distribution\"*\n"
+                "• **Custom Cohort Comparisons:** *\"Compare employees with overtime vs without overtime\"*, *\"Compare Sales vs Engineering\"*\n"
+                "• **Employee Record Deep Dive:** *\"Tell me about employee #E02744\"*\n"
+                "• **HR Policy Knowledge (RAG):** *\"What is our policy on overtime pay and workload limits?\"*, *\"What is our 5-day retention intervention playbook?\"*\n"
+                "• **Combined Intelligence:** *\"What is our overtime policy and how many active employees in Sales are working overtime?\"*"
             ),
-            "suggestions": dynamic_q[:4],
-            "source": "rule_based_fallback",
-        }
+            source="rule_based_fallback",
+            suggestions=dynamic_q[:4],
+        )
 
-    # ── 8. Freeform / Fallback with Gemini or Smart Guidance ───
+    # ── 5. Freeform / Fallback with Grounded Gemini ───────────
     gemini_reply = _call_gemini_api(user_message)
     dynamic_q = generate_dataset_questions()
 
     if gemini_reply:
-        return {
-            "intent": "freeform",
-            "response": gemini_reply,
-            "suggestions": dynamic_q[:4],
-            "source": "gemini_ai",
-        }
+        return _build_response_payload(
+            intent="freeform",
+            response_text=gemini_reply,
+            source="gemini_ai",
+            suggestions=dynamic_q[:4],
+        )
 
-    return {
-        "intent": "unknown",
-        "response": (
-            "🤔 I specialize in employee attrition analytics, flight-risk modeling, and retention planning.\n\n"
-            "Try asking me one of the suggested questions below based on your active dataset!"
+    return _build_response_payload(
+        intent="unknown",
+        response_text=(
+            "🤔 I specialize in employee attrition analytics, full-dataset calculations, flight-risk modeling, and company HR policies.\n\n"
+            "Try asking one of the suggested questions below based on your active dataset and documentation!"
         ),
-        "suggestions": dynamic_q[:4],
-        "source": "rule_based_fallback",
-    }
+        source="rule_based_fallback",
+        suggestions=dynamic_q[:4],
+    )
