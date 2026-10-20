@@ -1,131 +1,132 @@
 import React from 'react';
-import { Activity, Sparkles, UploadCloud, RotateCcw, FileSpreadsheet } from 'lucide-react';
+import {
+  Activity,
+  Sparkles,
+  UploadCloud,
+  RotateCcw,
+  FileSpreadsheet,
+  Home,
+  BarChart2,
+  PieChart,
+  FileText,
+  Bot,
+} from 'lucide-react';
 
 export default function Header({
   datasetInfo = {},
+  activeTab = 'home',
+  onTabChange,
   onOpenUploadModal,
   onResetDataset,
+  onOpenCopilot,
 }) {
   const hasDataset = Boolean(datasetInfo && datasetInfo.has_dataset);
   const totalEmployees = (datasetInfo.total_employees || 0).toLocaleString();
   const datasetName = datasetInfo.dataset_name || 'No Dataset';
 
+  const navItems = [
+    { id: 'home', label: 'Home', icon: Home },
+    { id: 'analysis', label: 'Analysis', icon: BarChart2 },
+    { id: 'visualizations', label: 'Visualizations', icon: PieChart },
+    { id: 'reports', label: 'Reports', icon: FileText },
+    { id: 'copilot', label: 'AI Copilot', icon: Bot },
+  ];
+
+  const handleNavClick = (id) => {
+    if (id === 'copilot' && onOpenCopilot) {
+      onOpenCopilot();
+    } else if (onTabChange) {
+      onTabChange(id);
+    }
+  };
+
   return (
-    <header className="dashboard-header">
+    <header className="dashboard-header-modern">
+      {/* ── Left: Brand & Logo ── */}
       <div className="header-left">
-        <div className="header-logo">
-          <Activity size={26} strokeWidth={2.5} />
+        <div className="header-logo-badge">
+          <Activity size={22} strokeWidth={2.6} />
         </div>
-        <div>
-          <h1 className="header-title">
-            Employee Attrition <span className="header-title-highlight">Intelligence</span>
-          </h1>
-          <p className="header-subtitle">
-            Dynamic CSV Synthesizer, Retention Diagnostics & Gemini AI Copilot
-          </p>
+        <div className="header-brand-text">
+          <h1 className="header-brand-title">Employee Attrition Intelligence</h1>
+          <p className="header-brand-subtitle">Analytics &bull; Insights &bull; AI Copilot</p>
         </div>
       </div>
 
-      <div className="header-right" style={{ flexWrap: 'wrap', gap: '10px' }}>
-        {/* Active Dataset Pill */}
+      {/* ── Center: Top Navigation Bar ── */}
+      <nav className="header-center-nav">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          const isActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`nav-tab-btn ${isActive ? 'active' : ''}`}
+              onClick={() => handleNavClick(item.id)}
+            >
+              <Icon size={14} className="nav-tab-icon" />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* ── Right: Dataset Status, Actions & Profile ── */}
+      <div className="header-right-actions">
+        {/* Dataset Status Pill */}
         {hasDataset ? (
           <div
-            className="status-badge green"
-            title={`Active file: ${datasetName}`}
-            style={{ maxWidth: '280px' }}
+            className="status-pill dataset-active"
+            title={`Active dataset: ${datasetName} (${totalEmployees} records)`}
           >
-            <span className="dot-pulse"></span>
-            <FileSpreadsheet size={13} style={{ flexShrink: 0 }} />
-            <span
-              style={{
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {datasetName} ({totalEmployees} records)
+            <span className="live-pulse-dot"></span>
+            <FileSpreadsheet size={13} />
+            <span className="dataset-label-text">
+              {datasetName} ({totalEmployees})
             </span>
           </div>
         ) : (
-          <div
-            className="status-badge"
-            title="Awaiting CSV upload"
-            style={{
-              background: '#f8fafc',
-              borderColor: '#e2e8f0',
-              color: '#64748b',
-            }}
-          >
-            <span
-              style={{
-                width: '7px',
-                height: '7px',
-                borderRadius: '50%',
-                background: '#94a3b8',
-                display: 'inline-block',
-              }}
-            ></span>
+          <div className="status-pill no-dataset" title="No active dataset loaded">
+            <span className="inactive-dot"></span>
             <FileSpreadsheet size={13} />
-            <span>Awaiting CSV Upload</span>
+            <span>No dataset loaded</span>
           </div>
         )}
 
-        {/* Clear Dataset / New CSV Button (visible when a dataset is active) */}
+        {/* Clear/Reset button when dataset loaded */}
         {hasDataset && (
           <button
+            type="button"
+            className="btn-clear-dataset"
             onClick={onResetDataset}
             title="Clear dataset and return to upload screen"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '7px 14px',
-              background: '#ffffff',
-              border: '1px solid #fecaca',
-              borderRadius: 'var(--radius-full)',
-              color: '#dc2626',
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-            }}
           >
             <RotateCcw size={13} />
-            <span>Clear / New CSV</span>
+            <span>Clear</span>
           </button>
         )}
 
-        {/* Upload Dataset Button */}
+        {/* Upload CSV Button */}
         <button
+          type="button"
+          className="btn-header-upload"
           onClick={onOpenUploadModal}
-          title="Upload employee CSV file"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '7px 16px',
-            background: 'var(--gradient-primary)',
-            border: 'none',
-            borderRadius: 'var(--radius-full)',
-            color: '#ffffff',
-            fontSize: '0.78rem',
-            fontWeight: 700,
-            cursor: 'pointer',
-            boxShadow: '0 3px 10px rgba(16, 185, 129, 0.3)',
-            transition: 'all 0.2s ease',
-          }}
+          title="Upload employee CSV"
         >
-          <UploadCloud size={15} />
-          <span>{hasDataset ? 'Upload Different CSV' : 'Upload CSV'}</span>
+          <UploadCloud size={14} />
+          <span>Upload CSV</span>
         </button>
 
-        {/* Gemini Badge */}
-        <div
-          className="status-badge accent"
-          style={{ borderColor: 'var(--primary-300)', color: 'var(--primary-700)' }}
-        >
-          <Sparkles size={14} style={{ color: 'var(--primary-500)' }} />
+        {/* Gemini AI Status Badge */}
+        <div className="gemini-connected-badge" title="Gemini 2.5 Flash connected and active">
+          <Sparkles size={13} className="sparkle-active" />
           <span>Gemini AI Connected</span>
+        </div>
+
+        {/* User Profile Avatar */}
+        <div className="user-profile-avatar" title="Pranav Shende (HR Admin)">
+          <span>PS</span>
         </div>
       </div>
     </header>

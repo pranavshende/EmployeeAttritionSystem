@@ -20,6 +20,8 @@ import {
 } from './api';
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState('home');
+  const [isCopilotOpen, setIsCopilotOpen] = useState(false);
   const [kpis, setKpis] = useState(null);
   const [filterOptions, setFilterOptions] = useState({});
   const [currentFilters, setCurrentFilters] = useState({});
@@ -30,6 +32,7 @@ export default function App() {
   const [aiSummary, setAiSummary] = useState('');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+
 
   // Load analytics when a dataset is confirmed active
   const loadBaselineData = async () => {
@@ -236,64 +239,125 @@ export default function App() {
 
   const hasDataset = Boolean(datasetInfo && datasetInfo.has_dataset);
 
+  const handleTabChange = (tab) => {
+    if (tab === 'copilot') {
+      setIsCopilotOpen(true);
+      return;
+    }
+
+    if (!hasDataset && (tab === 'analysis' || tab === 'visualizations' || tab === 'reports')) {
+      setIsUploadModalOpen(true);
+      return;
+    }
+
+    setActiveTab(tab);
+  };
+
   return (
     <div className="app-container">
-      {/* ── Top Header ── */}
+      {/* ── Top Header (Screenshot 2 Parity) ── */}
       <Header
         datasetInfo={datasetInfo}
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
         onOpenUploadModal={() => setIsUploadModalOpen(true)}
         onResetDataset={handleResetDataset}
+        onOpenCopilot={() => setIsCopilotOpen(true)}
       />
 
-      {/* ── Main View: Loading | Empty Hero (No Previous CSV) | Full Analytics ── */}
+      {/* ── Main View: Loading | Empty Hero Split Layout | Full Analytics ── */}
       {isLoading ? (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '55vh',
-          gap: '16px',
-        }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: '55vh',
+            gap: '16px',
+          }}
+        >
           <Loader2 size={44} className="spin-animation text-emerald" />
           <p style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.95rem' }}>
-            Synthesizing workforce metrics & generating AI analytics...
+            Synthesizing workforce metrics &amp; generating AI analytics...
           </p>
         </div>
       ) : !hasDataset ? (
-        /* Empty State: Absolutely no previous CSV details shown */
-        <UploadHero onUploadSuccess={handleUploadSuccess} />
+        /* Empty State: Split 2-Column Hero Layout matching Screenshot 2 */
+        <UploadHero
+          onUploadSuccess={handleUploadSuccess}
+          onOpenCopilot={() => setIsCopilotOpen(true)}
+        />
       ) : (
         /* Generated On-the-spot Analytics: Shown ONLY after adding a CSV */
         <>
           {/* ── AI Executive Synthesis Banner (Generated on the spot by Gemini) ── */}
           <AiInsightsBanner datasetInfo={datasetInfo} aiSummary={aiSummary} />
 
-          {/* ── Multidimensional Filter Bar ── */}
-          <FilterBar
-            filterOptions={filterOptions}
-            currentFilters={currentFilters}
-            onFilterChange={handleFilterChange}
-            onReset={handleResetFilters}
-          />
+          {/* ── Tab Views ── */}
+          {activeTab === 'home' && (
+            <>
+              <FilterBar
+                filterOptions={filterOptions}
+                currentFilters={currentFilters}
+                onFilterChange={handleFilterChange}
+                onReset={handleResetFilters}
+              />
+              <KpiCards kpis={kpis} />
+              <ChartsGrid chartsData={chartsData} />
+              <HighRiskTable
+                highRiskData={highRiskData}
+                currentPage={highRiskPage}
+                onPageChange={handleHighRiskPageChange}
+              />
+            </>
+          )}
 
-          {/* ── KPI Metrics Cards ── */}
-          <KpiCards kpis={kpis} />
+          {activeTab === 'analysis' && (
+            <>
+              <FilterBar
+                filterOptions={filterOptions}
+                currentFilters={currentFilters}
+                onFilterChange={handleFilterChange}
+                onReset={handleResetFilters}
+              />
+              <KpiCards kpis={kpis} />
+              <HighRiskTable
+                highRiskData={highRiskData}
+                currentPage={highRiskPage}
+                onPageChange={handleHighRiskPageChange}
+              />
+            </>
+          )}
 
-          {/* ── 11 Interactive Charts ── */}
-          <ChartsGrid chartsData={chartsData} />
+          {activeTab === 'visualizations' && (
+            <>
+              <FilterBar
+                filterOptions={filterOptions}
+                currentFilters={currentFilters}
+                onFilterChange={handleFilterChange}
+                onReset={handleResetFilters}
+              />
+              <ChartsGrid chartsData={chartsData} />
+            </>
+          )}
 
-          {/* ── High-Risk Watchlist ── */}
-          <HighRiskTable
-            highRiskData={highRiskData}
-            currentPage={highRiskPage}
-            onPageChange={handleHighRiskPageChange}
-          />
+          {activeTab === 'reports' && (
+            <HighRiskTable
+              highRiskData={highRiskData}
+              currentPage={highRiskPage}
+              onPageChange={handleHighRiskPageChange}
+            />
+          )}
         </>
       )}
 
       {/* ── Conversational AI Copilot (Tuned dynamically to active dataset) ── */}
-      <ChatbotDrawer datasetInfo={datasetInfo} />
+      <ChatbotDrawer
+        datasetInfo={datasetInfo}
+        isOpen={isCopilotOpen}
+        onClose={() => setIsCopilotOpen(false)}
+      />
 
       {/* ── CSV Upload & AI Generation Modal ── */}
       <UploadModal
@@ -304,3 +368,4 @@ export default function App() {
     </div>
   );
 }
+

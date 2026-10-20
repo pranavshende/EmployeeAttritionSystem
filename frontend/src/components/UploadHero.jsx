@@ -7,12 +7,19 @@ import {
   ShieldAlert,
   BrainCircuit,
   Zap,
-  ArrowRight,
-  CheckCircle2,
+  Users,
+  ChevronRight,
+  Send,
+  Paperclip,
+  Maximize2,
+  MoreHorizontal,
+  Lightbulb,
+  Bot,
   AlertCircle,
   Loader2,
+  RotateCcw,
 } from 'lucide-react';
-import { uploadDataset, loadSampleDataset } from '../api';
+import { uploadDataset, loadSampleDataset, sendChatMessage } from '../api';
 
 const SAMPLE_CSV = `EmployeeID,Age,Department,JobRole,Salary,OverTime,YearsAtCompany,Attrition
 101,23,Engineering,Frontend Engineer,4500,Yes,1,Yes
@@ -32,12 +39,28 @@ const SAMPLE_CSV = `EmployeeID,Age,Department,JobRole,Salary,OverTime,YearsAtCom
 115,23,Sales,SDR Representative,3800,Yes,1,Yes
 `;
 
-export default function UploadHero({ onUploadSuccess }) {
+const DEFAULT_SUGGESTIONS = [
+  'What is the overall attrition rate?',
+  'Which department has the highest attrition?',
+  'Show me key factors driving attrition.',
+  'List employees most likely to leave.',
+  'Compare attrition across job roles.',
+  'Give me actionable recommendations to reduce attrition.',
+];
+
+export default function UploadHero({ onUploadSuccess, onOpenCopilot }) {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const fileInputRef = useRef(null);
+
+  // Copilot Interactive State
+  const [copilotInput, setCopilotInput] = useState('');
+  const [isCopilotSending, setIsCopilotSending] = useState(false);
+  const [copilotConversation, setCopilotConversation] = useState([]);
+  const [showConversation, setShowConversation] = useState(false);
+  const copilotEndRef = useRef(null);
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -119,68 +142,217 @@ export default function UploadHero({ onUploadSuccess }) {
     }
   };
 
-  return (
-    <section className="upload-hero-container">
-      {/* Glow Orbs */}
-      <div className="hero-glow-orb orb-1"></div>
-      <div className="hero-glow-orb orb-2"></div>
+  // ── Copilot Actions ──
+  const handleCopilotSend = async (customPrompt) => {
+    const prompt = (customPrompt || copilotInput).trim();
+    if (!prompt || isCopilotSending) return;
 
-      <div className="upload-hero-card">
-        {/* Top Badge */}
-        <div className="hero-pill-badge">
-          <Sparkles size={14} className="sparkle-icon" />
-          <span>Interactive Attrition Intelligence &bull; Gemini 2.5 Flash</span>
+    setShowConversation(true);
+    const userMsg = { id: Date.now(), sender: 'user', text: prompt };
+    setCopilotConversation((prev) => [...prev, userMsg]);
+    setCopilotInput('');
+    setIsCopilotSending(true);
+
+    try {
+      const res = await sendChatMessage(prompt, 'hero_copilot_session');
+      const botMsg = {
+        id: Date.now() + 1,
+        sender: 'bot',
+        text: res.response || "I've processed your request.",
+        source: res.source,
+      };
+      setCopilotConversation((prev) => [...prev, botMsg]);
+    } catch (e) {
+      console.error('Copilot send failed:', e);
+      setCopilotConversation((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          sender: 'bot',
+          text:
+            "📊 **Dataset required for precise cohort metrics.**\n\nPlease upload your employee CSV file using the box on the left, or click below to load our sample tech startup cohort (15 employees) to immediately see these calculations!",
+          isActionFallback: true,
+        },
+      ]);
+    } finally {
+      setIsCopilotSending(false);
+      setTimeout(() => {
+        copilotEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    }
+  };
+
+  return (
+    <div className="hero-split-layout">
+      {/* Hidden File Input for Paperclip or Browse button */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv"
+        style={{ display: 'none' }}
+        onChange={handleFileChange}
+        disabled={isUploading}
+      />
+
+      {/* ═════════════════════════════════════════════════════
+          LEFT COLUMN: Hero, Upload Dropzone, Samples, Highlights
+          ═════════════════════════════════════════════════════ */}
+      <div className="hero-left-col">
+        {/* Top Header Section with Title + Floating Preview Cluster */}
+        <div className="hero-header-section">
+          <div className="hero-header-content">
+            <div className="hero-ai-badge">
+              <Sparkles size={13} className="sparkle-active" />
+              <span>AI-Powered Workforce Analytics</span>
+            </div>
+            <h1 className="hero-title-main">
+              Turn workforce data into <br />
+              <span className="hero-title-emerald">clear attrition insights</span>
+            </h1>
+            <p className="hero-subtitle-text">
+              Upload your employee CSV to automatically calculate turnover rates, generate 11 interactive visual
+              breakdowns, pinpoint high-risk flight segments, and activate the AI Copilot for deeper analysis and
+              recommendations.
+            </p>
+          </div>
+
+          {/* Floating Metric Illustrations Cluster (Exact Screenshot 2 Parity) */}
+          <div className="hero-preview-cluster" aria-hidden="true">
+            {/* Top Card: Attrition Rate & Wave */}
+            <div className="floating-preview-card">
+              <div className="preview-rate-header">
+                <span>Attrition Rate</span>
+                <span className="preview-rate-badge">&darr; -2.4%</span>
+              </div>
+              <div className="preview-rate-val-row">
+                <span className="preview-rate-number">16.2%</span>
+              </div>
+              <svg viewBox="0 0 140 34" className="preview-sparkline-svg">
+                <defs>
+                  <linearGradient id="previewWaveGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#10b981" stopOpacity="0.32" />
+                    <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                  </linearGradient>
+                </defs>
+                <path
+                  d="M 0 24 Q 28 8, 55 18 T 105 7 T 140 14 L 140 34 L 0 34 Z"
+                  fill="url(#previewWaveGrad)"
+                />
+                <path
+                  d="M 0 24 Q 28 8, 55 18 T 105 7 T 140 14"
+                  fill="none"
+                  stroke="#10b981"
+                  strokeWidth="2.4"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+
+            {/* Bottom Row: High Risk Segments & AI Insights */}
+            <div className="preview-mini-row">
+              {/* High Risk Segments Mini Card */}
+              <div className="floating-preview-card" style={{ padding: '10px 12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <div
+                    style={{
+                      width: '18px',
+                      height: '18px',
+                      borderRadius: '50%',
+                      background: '#fee2e2',
+                      color: '#ef4444',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Users size={10} />
+                  </div>
+                  <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#334155' }}>High Risk</span>
+                </div>
+                <div className="preview-bars">
+                  <div className="preview-bar-item" style={{ height: '10px' }}></div>
+                  <div className="preview-bar-item" style={{ height: '18px' }}></div>
+                  <div className="preview-bar-item" style={{ height: '14px' }}></div>
+                  <div className="preview-bar-item" style={{ height: '22px' }}></div>
+                  <div className="preview-bar-item" style={{ height: '12px' }}></div>
+                </div>
+              </div>
+
+              {/* AI Insights Mini Card */}
+              <div className="floating-preview-card" style={{ padding: '10px 12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <Sparkles size={11} style={{ color: '#059669' }} />
+                  <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#334155' }}>AI Insights</span>
+                </div>
+                <svg viewBox="0 0 32 32" className="preview-donut-svg">
+                  <circle cx="16" cy="16" r="12" fill="none" stroke="#e2e8f0" strokeWidth="3.2" />
+                  <circle
+                    cx="16"
+                    cy="16"
+                    r="12"
+                    fill="none"
+                    stroke="#059669"
+                    strokeWidth="3.2"
+                    strokeDasharray="75.4"
+                    strokeDashoffset="22"
+                    strokeLinecap="round"
+                    transform="rotate(-90 16 16)"
+                  />
+                </svg>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Title & Description */}
-        <h1 className="hero-main-title">
-          Upload Your Employee CSV to <span className="text-gradient-emerald">Generate Instant Analysis</span>
-        </h1>
-        <p className="hero-main-subtitle">
-          No previous dataset details are shown. Add your workforce CSV to dynamically calculate turnover rates,
-          generate 11 interactive visual breakdowns, pinpoint high-risk flight segments, and activate the AI Copilot.
-        </p>
-
-        {/* Drag & Drop Upload Zone */}
+        {/* ── Drag & Drop Upload Zone ── */}
         <div
-          className={`hero-dropzone ${isDragging ? 'dragging' : ''} ${isUploading ? 'uploading' : ''}`}
+          className={`dropzone-emerald ${isDragging ? 'dragging' : ''} ${isUploading ? 'uploading' : ''}`}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={() => !isUploading && fileInputRef.current?.click()}
         >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv"
-            style={{ display: 'none' }}
-            onChange={handleFileChange}
-            disabled={isUploading}
-          />
-
           {isUploading ? (
-            <div className="dropzone-loading">
-              <Loader2 size={44} className="spin-animation text-emerald" />
-              <h3 className="dropzone-title text-emerald">Synthesizing Dataset</h3>
-              <p className="dropzone-text">{uploadStatus}</p>
-              <div className="progress-bar-container">
-                <div className="progress-bar-fill"></div>
+            <div style={{ padding: '24px 0' }}>
+              <Loader2 size={44} className="spin-animation" style={{ color: '#059669', margin: '0 auto 12px' }} />
+              <h3 className="dropzone-heading" style={{ color: '#059669' }}>
+                Synthesizing Dataset with AI
+              </h3>
+              <p className="dropzone-subtext" style={{ fontWeight: 600 }}>
+                {uploadStatus}
+              </p>
+              <div
+                style={{
+                  maxWidth: '300px',
+                  height: '6px',
+                  background: '#a7f3d0',
+                  borderRadius: '3px',
+                  margin: '12px auto 0',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    background: '#059669',
+                    animation: 'pulse 1.2s infinite ease-in-out',
+                  }}
+                ></div>
               </div>
             </div>
           ) : (
-            <div className="dropzone-content">
-              <div className="dropzone-icon-circle">
-                <UploadCloud size={38} className="text-emerald" />
+            <div>
+              <div className="dropzone-circle-icon">
+                <UploadCloud size={28} />
               </div>
-              <h3 className="dropzone-title">
-                Drag and drop your employee CSV file here
-              </h3>
-              <p className="dropzone-text">
-                Supports any standard HR or workforce CSV file with smart column auto-detection
+              <h3 className="dropzone-heading">Drag and drop your employee CSV file here</h3>
+              <p className="dropzone-subtext">
+                Supports any standard HR or workforce CSV file with smart column auto-detection.
               </p>
               <button
                 type="button"
-                className="btn-select-file"
+                className="btn-browse-emerald"
                 onClick={(e) => {
                   e.stopPropagation();
                   fileInputRef.current?.click();
@@ -189,73 +361,72 @@ export default function UploadHero({ onUploadSuccess }) {
                 <FileSpreadsheet size={16} />
                 <span>Browse Local CSV</span>
               </button>
+              <p className="dropzone-privacy-footer">
+                Your data stays private and is only used for analysis in this session.
+              </p>
             </div>
           )}
         </div>
 
         {/* Error Alert */}
         {errorMessage && (
-          <div className="hero-error-banner">
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 16px',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: '8px',
+              color: '#dc2626',
+              fontSize: '0.85rem',
+            }}
+          >
             <AlertCircle size={18} />
             <span>{errorMessage}</span>
           </div>
         )}
 
-        {/* Quick Demo Options */}
-        <div className="hero-quick-samples">
-          <span className="quick-sample-label">Want to test without a file?</span>
+        {/* Sample Datasets Row */}
+        <div className="hero-sample-row">
+          <span className="sample-row-label">Want to try a sample dataset?</span>
           <button
             type="button"
-            className="btn-quick-sample"
+            className="btn-sample-chip"
             onClick={handleSampleUpload}
             disabled={isUploading}
           >
-            <Sparkles size={14} />
-            <span>Load Quick Tech Startup Cohort (15 Employees)</span>
+            <Users size={14} style={{ color: '#0284c7' }} />
+            <span>Load Quick Test Startup Cohort (15 Employees)</span>
           </button>
           <button
             type="button"
-            className="btn-quick-sample benchmark"
+            className="btn-sample-chip"
             onClick={handleLoadIBMDataset}
             disabled={isUploading}
           >
-            <BarChart3 size={14} />
+            <BarChart3 size={14} style={{ color: '#059669' }} />
             <span>Load Benchmark IBM HR Cohort (1,470 Employees)</span>
           </button>
         </div>
 
-        {/* Supported Schema Helper */}
-        <div className="hero-schema-helper">
-          <div className="schema-helper-title">
-            <span>Smart Column Aliases Detected Automatically:</span>
-          </div>
-          <div className="schema-chips">
-            <span className="schema-chip" title="attrition, left, churn, turnover, is_left, resigned">
-              ✓ Attrition / Churn
-            </span>
-            <span className="schema-chip" title="department, dept, team, division, business_unit">
-              ✓ Department / Team
-            </span>
-            <span className="schema-chip" title="job_role, role, position, title, designation">
-              ✓ Job Role / Title
-            </span>
-            <span className="schema-chip" title="salary, monthly_income, income, compensation, pay">
-              ✓ Monthly Income / Salary
-            </span>
-            <span className="schema-chip" title="overtime, over_time, ot">
-              ✓ Overtime (Yes/No)
-            </span>
-            <span className="schema-chip" title="years_at_company, tenure, company_tenure, service_years">
-              ✓ Company Tenure
-            </span>
-            <span className="schema-chip" title="age, employee_age">
-              ✓ Employee Age
-            </span>
+        {/* Smart Column Aliases */}
+        <div className="smart-aliases-box">
+          <div className="smart-aliases-title">Smart Column Aliases Detected Automatically:</div>
+          <div className="smart-aliases-chips">
+            <span className="smart-alias-pill">✓ Attrition / Churn</span>
+            <span className="smart-alias-pill">✓ Department / Team</span>
+            <span className="smart-alias-pill">✓ Job Role / Title</span>
+            <span className="smart-alias-pill">✓ Monthly Income / Salary</span>
+            <span className="smart-alias-pill">✓ Overtime (Yes/No)</span>
+            <span className="smart-alias-pill">✓ Company Tenure</span>
+            <span className="smart-alias-pill">✓ Employee Age</span>
           </div>
         </div>
 
-        {/* Feature Highlights Grid */}
-        <div className="hero-features-grid">
+        {/* 4 Feature Highlights Grid */}
+        <div className="hero-features-grid" style={{ marginTop: '10px' }}>
           <div className="hero-feature-card">
             <div className="feature-icon-wrapper mint">
               <Zap size={20} />
@@ -269,7 +440,7 @@ export default function UploadHero({ onUploadSuccess }) {
               <BarChart3 size={20} />
             </div>
             <h4>11 Visual Breakdowns</h4>
-            <p>Interactive Chart.js visualizations covering departments, salaries, tenure, and satisfaction.</p>
+            <p>Interactive charts &amp; visualizations covering departments, salaries, tenure, and satisfaction.</p>
           </div>
 
           <div className="hero-feature-card">
@@ -289,6 +460,206 @@ export default function UploadHero({ onUploadSuccess }) {
           </div>
         </div>
       </div>
-    </section>
+
+      {/* ═════════════════════════════════════════════════════
+          RIGHT COLUMN: AttritionAI Copilot Card (Interactive)
+          ═════════════════════════════════════════════════════ */}
+      <div className="hero-copilot-container">
+        {/* Header Bar */}
+        <div className="copilot-header-bar">
+          <div className="copilot-header-left">
+            <div className="copilot-sparkle-badge">
+              <Sparkles size={17} />
+            </div>
+            <div>
+              <h3 className="copilot-title-text">AttritionAI Copilot</h3>
+              <div className="copilot-status-line">
+                <span className="copilot-status-dot-green"></span>
+                <span>Online &bull; Ready for your analysis</span>
+              </div>
+            </div>
+          </div>
+          <div className="copilot-header-actions">
+            {showConversation && (
+              <button
+                type="button"
+                className="copilot-icon-btn"
+                onClick={() => setShowConversation(false)}
+                title="Back to Suggested Prompts"
+              >
+                <RotateCcw size={14} />
+              </button>
+            )}
+            <button
+              type="button"
+              className="copilot-icon-btn"
+              onClick={onOpenCopilot}
+              title="Expand to Full Copilot Drawer"
+            >
+              <Maximize2 size={14} />
+            </button>
+            <button
+              type="button"
+              className="copilot-icon-btn"
+              onClick={onOpenCopilot}
+              title="More Options"
+            >
+              <MoreHorizontal size={14} />
+            </button>
+          </div>
+        </div>
+
+        {/* Body Area */}
+        <div className="copilot-body-area">
+          {/* Default Welcome Bubble */}
+          <div className="copilot-greeting-row">
+            <div className="copilot-bot-avatar">
+              <Bot size={18} />
+            </div>
+            <div className="copilot-greeting-bubble">
+              Hi! I'm your AttritionAI Copilot powered by Gemini. Upload your employee dataset and I can help you
+              analyze attrition, explore trends, find at-risk segments, and suggest actionable recommendations.
+            </div>
+          </div>
+
+          {/* Conversation History (if user clicked or typed) */}
+          {showConversation && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {copilotConversation.map((msg) => (
+                <div
+                  key={msg.id}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+                    maxWidth: '92%',
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '12px',
+                      fontSize: '0.8rem',
+                      lineHeight: '1.45',
+                      background: msg.sender === 'user' ? '#059669' : '#f8fafc',
+                      color: msg.sender === 'user' ? '#ffffff' : '#1e293b',
+                      border: msg.sender === 'user' ? 'none' : '1px solid #e2e8f0',
+                      whiteSpace: 'pre-wrap',
+                    }}
+                  >
+                    {msg.text}
+                  </div>
+
+                  {/* Fallback Action Buttons if no dataset */}
+                  {msg.isActionFallback && (
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={handleSampleUpload}
+                        className="btn-sample-chip"
+                        style={{ background: '#ecfdf5', borderColor: '#a7f3d0', color: '#047857' }}
+                      >
+                        <Users size={12} />
+                        <span>Load Startup Sample</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="btn-sample-chip"
+                      >
+                        <FileSpreadsheet size={12} />
+                        <span>Browse CSV</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {isCopilotSending && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', alignSelf: 'flex-start' }}>
+                  <div className="copilot-bot-avatar" style={{ width: '26px', height: '26px' }}>
+                    <Bot size={14} />
+                  </div>
+                  <div className="typing-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                </div>
+              )}
+              <div ref={copilotEndRef} />
+            </div>
+          )}
+
+          {/* Suggestions Box (Always accessible or when conversation not started) */}
+          {!showConversation && (
+            <div className="copilot-suggestions-card">
+              <div className="copilot-suggestions-heading">
+                <Lightbulb size={15} style={{ color: '#059669' }} />
+                <span>Try asking something like:</span>
+              </div>
+              <div className="copilot-suggestions-list">
+                {DEFAULT_SUGGESTIONS.map((suggestion, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    className="copilot-prompt-card"
+                    onClick={() => handleCopilotSend(suggestion)}
+                    disabled={isCopilotSending}
+                  >
+                    <span>{suggestion}</span>
+                    <ChevronRight size={14} className="prompt-chevron" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Input Bar */}
+        <div className="copilot-input-zone">
+          <div className="copilot-input-box">
+            <button
+              type="button"
+              className="btn-copilot-clip"
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach / Upload CSV"
+            >
+              <Paperclip size={16} />
+            </button>
+            <input
+              type="text"
+              className="copilot-text-input"
+              placeholder="Ask a question about your employee data..."
+              value={copilotInput}
+              onChange={(e) => setCopilotInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleCopilotSend();
+                }
+              }}
+              disabled={isCopilotSending}
+            />
+            <button
+              type="button"
+              className="btn-copilot-send-round"
+              onClick={() => handleCopilotSend()}
+              disabled={!copilotInput.trim() || isCopilotSending}
+              title="Send question to Copilot"
+            >
+              {isCopilotSending ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Send size={14} />
+              )}
+            </button>
+          </div>
+          <p className="copilot-input-disclaimer">
+            Grounded in your uploaded dataset &bull; Powered by Gemini &bull; No hallucinations
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }

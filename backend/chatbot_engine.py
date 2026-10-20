@@ -292,7 +292,7 @@ def generate_ai_dataset_summary(dataset_name=None):
         }
         try:
             req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=12) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 candidates = data.get("candidates", [])
                 if candidates:
@@ -301,8 +301,13 @@ def generate_ai_dataset_summary(dataset_name=None):
                         summary = parts[0]["text"].strip()
                         dl.DATASET_INFO["ai_summary"] = summary
                         return summary
+        except urllib.error.HTTPError as e:
+            logger.warning(f"Error generating AI dataset summary from {model}: {e}")
+            if e.code in (400, 401, 403, 429):
+                break
         except Exception as e:
-            logger.warning(f"Error generating AI dataset summary: {e}")
+            logger.warning(f"Error generating AI dataset summary from {model}: {e}")
+            break
 
     fallback = (
         f"• **Stability**: Ingested {total:,} records with an overall attrition rate of {attr_rate}%.\n"

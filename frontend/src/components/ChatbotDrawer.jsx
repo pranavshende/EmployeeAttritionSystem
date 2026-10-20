@@ -9,9 +9,22 @@ const NO_DATASET_SUGGESTIONS = [
   'What are top indicators of employee turnover?',
 ];
 
-export default function ChatbotDrawer({ datasetInfo = {} }) {
+export default function ChatbotDrawer({
+  datasetInfo = {},
+  isOpen: externalIsOpen,
+  onClose: externalOnClose,
+}) {
   const hasDataset = Boolean(datasetInfo && datasetInfo.has_dataset);
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
+
+  const setIsOpen = (val) => {
+    if (externalOnClose && !val) {
+      externalOnClose();
+    }
+    setInternalIsOpen(val);
+  };
+
   const [inputMessage, setInputMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
