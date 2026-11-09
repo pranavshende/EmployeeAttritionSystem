@@ -173,7 +173,7 @@ export default function Header({
           {/* Gemini AI Status Badge */}
           <div className="gemini-connected-badge" title="Gemini 2.5 Flash connected and active">
             <Sparkles size={13} className="sparkle-active" />
-            <span className="gemini-badge-text">Gemini AI Connected</span>
+            <span className="gemini-badge-text">Gemini AI</span>
           </div>
 
           {/* User Profile Avatar */}
@@ -311,30 +311,6 @@ export default function Header({
           </div>
         </div>
       )}
-
-      {/* ── Mobile Bottom Navigation Bar (< 768px) ── */}
-      <nav className="mobile-bottom-nav" aria-label="Mobile Bottom Navigation">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = activeTab === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={`bottom-nav-btn ${isActive ? 'active' : ''} ${item.isAi ? 'bottom-ai-btn' : ''}`}
-              onClick={() => handleNavClick(item.id)}
-              aria-label={item.label}
-            >
-              <div className="bottom-nav-icon-container">
-                <Icon size={18} className="bottom-nav-icon" />
-                {item.isAi && <span className="bottom-ai-sparkle"></span>}
-              </div>
-              <span className="bottom-nav-label">{item.label === 'Visualizations' ? 'Visuals' : item.label}</span>
-              {isActive && <span className="bottom-nav-active-pill"></span>}
-            </button>
-          );
-        })}
-      </nav>
     </>
   );
 }

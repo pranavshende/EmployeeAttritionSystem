@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles, FileText, CheckCircle, TrendingDown, ArrowRight } from 'lucide-react';
+import { Sparkles, FileText } from 'lucide-react';
 
 export default function AiInsightsBanner({ datasetInfo = {}, aiSummary = '' }) {
   if (!aiSummary && !datasetInfo.is_custom) return null;

@@ -17,35 +17,32 @@ export default function ChatbotDrawer({
   onToggle: externalOnToggle,
 }) {
   const hasDataset = Boolean(datasetInfo && datasetInfo.has_dataset);
-  const [internalIsOpen, setInternalIsOpen] = useState(Boolean(externalIsOpen));
-
-  // Sync internal state when parent component controls isOpen
-  useEffect(() => {
-    if (externalIsOpen !== undefined) {
-      setInternalIsOpen(Boolean(externalIsOpen));
-    }
-  }, [externalIsOpen]);
-
-  const isOpen = internalIsOpen;
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isControlled = externalIsOpen !== undefined;
+  const isOpen = isControlled ? Boolean(externalIsOpen) : internalIsOpen;
 
   const toggleOpen = (e) => {
     if (e && e.stopPropagation) e.stopPropagation();
-    const nextState = !isOpen;
-    setInternalIsOpen(nextState);
-    if (nextState) {
-      if (externalOnOpen) externalOnOpen();
-      if (externalOnToggle) externalOnToggle();
+    if (isControlled) {
+      if (externalOnToggle) {
+        externalOnToggle();
+      } else if (isOpen) {
+        if (externalOnClose) externalOnClose();
+      } else {
+        if (externalOnOpen) externalOnOpen();
+      }
     } else {
-      if (externalOnClose) externalOnClose();
-      if (externalOnToggle) externalOnToggle();
+      setInternalIsOpen((prev) => !prev);
     }
   };
 
   const handleClose = (e) => {
     if (e && e.stopPropagation) e.stopPropagation();
-    setInternalIsOpen(false);
-    if (externalOnClose) externalOnClose();
-    if (externalOnToggle) externalOnToggle();
+    if (isControlled) {
+      if (externalOnClose) externalOnClose();
+    } else {
+      setInternalIsOpen(false);
+    }
   };
 
   const [inputMessage, setInputMessage] = useState('');
