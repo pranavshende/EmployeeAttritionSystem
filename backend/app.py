@@ -12,7 +12,7 @@ _parent_dir = os.path.dirname(_current_dir)
 if _parent_dir not in sys.path:
     sys.path.insert(0, _parent_dir)
 
-from flask import Flask, send_from_directory
+from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
 
 try:
@@ -30,7 +30,18 @@ def create_app():
     frontend_dir = dist_dir if os.path.exists(dist_dir) else os.path.join(base_dir, "frontend")
 
     app = Flask(__name__, static_folder=frontend_dir, static_url_path="")
-    CORS(app)
+
+    # Configure CORS for API routes
+    cors_origins = os.environ.get("CORS_ORIGINS", "*")
+    if "," in cors_origins:
+        cors_origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
+
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": cors_origins}},
+        allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    )
 
     # Register API blueprints
     app.register_blueprint(dashboard_bp)
@@ -51,7 +62,6 @@ def create_app():
         if os.path.exists(os.path.join(frontend_dir, "index.html")):
             return send_from_directory(frontend_dir, "index.html")
         return {"error": "Not found"}, 404
-
 
     return app
 
