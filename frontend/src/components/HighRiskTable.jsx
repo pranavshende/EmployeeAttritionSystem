@@ -45,7 +45,7 @@ export default function HighRiskTable({
               Displaying {totalCount} prioritized profiles exceeding flight risk thresholds
             </p>
           </div>
-          <div style={{ position: 'relative' }}>
+          <div className="search-input-wrapper" style={{ position: 'relative' }}>
             <Search
               size={15}
               style={{
@@ -65,6 +65,10 @@ export default function HighRiskTable({
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
+        </div>
+
+        <div className="table-mobile-hint">
+          <span>&larr; Swipe horizontally to view full table &rarr;</span>
         </div>
 
         <div className="table-responsive">

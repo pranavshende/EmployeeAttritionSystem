@@ -346,7 +346,7 @@ export default function UploadHero({ onUploadSuccess, onOpenCopilot }) {
               <div className="dropzone-circle-icon">
                 <UploadCloud size={28} />
               </div>
-              <h3 className="dropzone-heading">Drag and drop your employee CSV file here</h3>
+              <h3 className="dropzone-heading">Tap to browse or drag &amp; drop your employee CSV</h3>
               <p className="dropzone-subtext">
                 Supports any standard HR or workforce CSV file with smart column auto-detection.
               </p>

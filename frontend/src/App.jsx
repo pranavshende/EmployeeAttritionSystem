@@ -356,7 +356,9 @@ export default function App() {
       <ChatbotDrawer
         datasetInfo={datasetInfo}
         isOpen={isCopilotOpen}
+        onOpen={() => setIsCopilotOpen(true)}
         onClose={() => setIsCopilotOpen(false)}
+        onToggle={() => setIsCopilotOpen((prev) => !prev)}
       />
 
       {/* ── CSV Upload & AI Generation Modal ── */}

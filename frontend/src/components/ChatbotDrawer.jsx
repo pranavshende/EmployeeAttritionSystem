@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, X, RefreshCw, Copy, Check, BookOpen } from 'lucide-react';
+import { Bot, Send, X, Copy, Check, BookOpen } from 'lucide-react';
 import { sendChatMessage, fetchChatbotSuggestions } from '../api';
 
 const NO_DATASET_SUGGESTIONS = [
@@ -13,16 +13,39 @@ export default function ChatbotDrawer({
   datasetInfo = {},
   isOpen: externalIsOpen,
   onClose: externalOnClose,
+  onOpen: externalOnOpen,
+  onToggle: externalOnToggle,
 }) {
   const hasDataset = Boolean(datasetInfo && datasetInfo.has_dataset);
-  const [internalIsOpen, setInternalIsOpen] = useState(false);
-  const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
+  const [internalIsOpen, setInternalIsOpen] = useState(Boolean(externalIsOpen));
 
-  const setIsOpen = (val) => {
-    if (externalOnClose && !val) {
-      externalOnClose();
+  // Sync internal state when parent component controls isOpen
+  useEffect(() => {
+    if (externalIsOpen !== undefined) {
+      setInternalIsOpen(Boolean(externalIsOpen));
     }
-    setInternalIsOpen(val);
+  }, [externalIsOpen]);
+
+  const isOpen = internalIsOpen;
+
+  const toggleOpen = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    const nextState = !isOpen;
+    setInternalIsOpen(nextState);
+    if (nextState) {
+      if (externalOnOpen) externalOnOpen();
+      if (externalOnToggle) externalOnToggle();
+    } else {
+      if (externalOnClose) externalOnClose();
+      if (externalOnToggle) externalOnToggle();
+    }
+  };
+
+  const handleClose = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    setInternalIsOpen(false);
+    if (externalOnClose) externalOnClose();
+    if (externalOnToggle) externalOnToggle();
   };
 
   const [inputMessage, setInputMessage] = useState('');
@@ -44,7 +67,7 @@ export default function ChatbotDrawer({
   const sessionIdRef = useRef('session_' + Math.random().toString(36).substring(2, 9));
 
   const initialBotText = hasDataset
-    ? `👋 **Welcome to AttritionAI!**\n\nI am dynamically analyzing **\`${datasetInfo.dataset_name || 'Active Dataset'}\`** (${(datasetInfo.total_employees || 0).toLocaleString()} records, ${datasetInfo.attrition_rate}% attrition).\n\nAsk about individual employees (e.g. *\"Tell me about employee #{id}\"*), department deep dives, comparisons, flight risks, or retention recommendations!`
+    ? `👋 **Welcome to AttritionAI!**\n\nI am dynamically analyzing **\`${datasetInfo.dataset_name || 'Active Dataset'}\`** (${(datasetInfo.total_employees || 0).toLocaleString()} records, ${datasetInfo.attrition_rate}% attrition).\n\nAsk about individual employees (e.g. *"Tell me about employee #{id}"*), department deep dives, comparisons, flight risks, or retention recommendations!`
     : "👋 **Welcome to AttritionAI!**\n\nI'm your workforce analytics intelligence assistant.\n\nNo CSV dataset is loaded yet. Upload your employee CSV file on the dashboard to generate instant metrics, or ask how attrition analysis works!";
 
   const [messages, setMessages] = useState([
@@ -249,7 +272,7 @@ export default function ChatbotDrawer({
         return (
           <ul key={pIdx}>
             {lines.map((line, lIdx) => {
-              const clean = line.replace(/^[\*\•\-]\s*/, '');
+              const clean = line.replace(/^[•*-]\s*/, '');
               return <li key={lIdx} dangerouslySetInnerHTML={{ __html: formatInline(clean) }} />;
             })}
           </ul>
@@ -283,12 +306,13 @@ export default function ChatbotDrawer({
     <>
       {/* Floating Action Button */}
       <button
-        className="chatbot-fab"
-        onClick={() => setIsOpen(!isOpen)}
+        type="button"
+        className={`chatbot-fab ${isOpen ? 'active-open' : ''}`}
+        onClick={toggleOpen}
         title={isOpen ? 'Close Chatbot' : 'Open AttritionAI Copilot'}
-        aria-label="Open AI Chatbot"
+        aria-label={isOpen ? 'Close AI Chatbot' : 'Open AI Chatbot'}
       >
-        <Bot size={28} />
+        {isOpen ? <X size={26} /> : <Bot size={28} />}
       </button>
 
       {/* Slide-out Drawer */}
@@ -316,8 +340,9 @@ export default function ChatbotDrawer({
               </div>
             </div>
             <button
+              type="button"
               className="btn-close-chat"
-              onClick={() => setIsOpen(false)}
+              onClick={handleClose}
               title="Close chat"
               aria-label="Close"
             >
