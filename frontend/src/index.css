@@ -1612,22 +1612,20 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
-  background: rgba(255, 255, 255, 0.96);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  padding: 10px 18px;
+  background: #ffffff;
   border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.04), 0 2px 6px -1px rgba(15, 23, 42, 0.02);
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
   position: sticky;
   top: 10px;
   z-index: 100;
-  margin-bottom: 20px;
-  gap: 10px;
+  margin-bottom: 22px;
+  gap: 16px;
   transition: all 0.2s ease;
 }
 
-/* ── Left: Brand ── */
+/* ── Left: Brand & Logo ── */
 .dashboard-header-modern .header-left {
   display: flex;
   align-items: center;
@@ -1636,17 +1634,17 @@ body {
 }
 
 .dashboard-header-modern .header-logo-badge {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  border-radius: 9px;
+  width: 32px;
+  height: 32px;
+  background: #059669;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #ffffff;
-  box-shadow: 0 3px 10px rgba(16, 185, 129, 0.3);
   flex-shrink: 0;
-  transition: transform 0.2s ease;
+  box-shadow: 0 2px 6px rgba(5, 150, 105, 0.25);
+  transition: transform 0.15s ease;
 }
 
 .dashboard-header-modern .header-logo-badge:hover {
@@ -1654,16 +1652,16 @@ body {
 }
 
 .dashboard-header-modern .header-logo-badge.small {
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
 }
 
 .dashboard-header-modern .header-brand-title {
-  font-size: 0.98rem;
-  font-weight: 800;
+  font-size: 0.96rem;
+  font-weight: 700;
   color: #0f172a;
-  letter-spacing: -0.3px;
+  letter-spacing: -0.25px;
   line-height: 1.2;
   margin: 0;
   display: flex;
@@ -1671,302 +1669,144 @@ body {
   white-space: nowrap;
 }
 
-.header-brand-title .brand-short {
-  display: none;
-}
-
-.dashboard-header-modern .header-brand-subtitle {
-  font-size: 0.7rem;
-  color: #059669;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-  line-height: 1.2;
-  margin: 2px 0 0;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-}
-
-.header-brand-subtitle .sub-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #10b981;
-  display: inline-block;
-  box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
-}
-
-/* ── Center: Top Navigation Bar (Desktop) ── */
+/* ── Center: Top Navigation Bar (Segmented Pills) ── */
 .header-center-nav {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   background: #f1f5f9;
-  padding: 3px;
+  padding: 3px 4px;
   border-radius: 9999px;
-  border: 1px solid #e2e8f0;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.03);
+  border: 1px solid #f1f5f9;
   flex-shrink: 0;
 }
 
 .nav-tab-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 12px;
+  justify-content: center;
+  padding: 5px 14px;
   border-radius: 9999px;
   border: none;
   background: transparent;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #475569;
   cursor: pointer;
-  transition: all 0.16s ease;
+  transition: all 0.15s ease;
   white-space: nowrap;
+  line-height: 1.4;
+  user-select: none;
 }
 
 .nav-tab-btn:hover {
   color: #0f172a;
-  background: rgba(255, 255, 255, 0.7);
 }
 
 .nav-tab-btn.active {
   background: #ffffff;
-  color: #059669;
-  font-weight: 700;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
-.nav-tab-icon {
-  color: inherit;
-  flex-shrink: 0;
-}
-
-.nav-ai-tag {
-  font-size: 0.6rem;
-  font-weight: 800;
-  padding: 1px 4px;
-  border-radius: 4px;
-  background: #ecfdf5;
-  color: #059669;
-  border: 1px solid #a7f3d0;
-  letter-spacing: 0.2px;
-  text-transform: uppercase;
-}
-
-/* ── Right Actions ── */
+/* ── Right: Actions ── */
 .header-right-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
-/* Dataset Status Pill */
-.status-pill {
+/* Active: 1,470 Employees Pill */
+.header-active-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  border-radius: 9999px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  white-space: nowrap;
-  transition: all 0.2s ease;
-}
-
-.status-pill .pill-icon {
-  flex-shrink: 0;
-}
-
-.status-pill.no-dataset {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: #64748b;
-}
-
-.status-pill.dataset-active {
-  background: #ecfdf5;
-  border: 1px solid #a7f3d0;
-  color: #047857;
-  max-width: 200px;
-}
-
-.dataset-label-text {
-  max-width: 95px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: inline-block;
-  vertical-align: middle;
-}
-
-.dataset-count-badge {
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: #059669;
-  opacity: 0.9;
-  flex-shrink: 0;
-}
-
-.live-pulse-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #10b981;
-  position: relative;
-  flex-shrink: 0;
-  display: inline-block;
-}
-
-.live-pulse-dot::after {
-  content: '';
-  position: absolute;
-  top: -2px;
-  left: -2px;
-  right: -2px;
-  bottom: -2px;
-  border-radius: 50%;
-  background: rgba(16, 185, 129, 0.4);
-  animation: pulseRipple 1.8s infinite ease-out;
-}
-
-@keyframes pulseRipple {
-  0% { transform: scale(1); opacity: 0.8; }
-  100% { transform: scale(2.4); opacity: 0; }
-}
-
-.inactive-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #94a3b8;
-  display: inline-block;
-  flex-shrink: 0;
-}
-
-/* Upload CSV Button */
-.btn-header-upload {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 13px;
-  background: linear-gradient(135deg, #059669 0%, #047857 100%);
-  border: none;
-  color: #ffffff;
+  justify-content: center;
+  padding: 6px 12px;
   border-radius: 8px;
   font-size: 0.78rem;
   font-weight: 600;
+  white-space: nowrap;
+  user-select: none;
+  transition: all 0.15s ease;
+  line-height: 1.3;
+}
+
+.header-active-pill.active {
+  background: #d1fae5;
+  border: 1px solid #a7f3d0;
+  color: #047857;
+}
+
+.header-active-pill.active.clickable {
   cursor: pointer;
-  transition: all 0.16s ease;
-  box-shadow: 0 2px 7px rgba(5, 150, 105, 0.25);
-  white-space: nowrap !important;
-  flex-shrink: 0;
 }
 
-.btn-header-upload:hover {
-  background: linear-gradient(135deg, #047857 0%, #065f46 100%);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 10px rgba(5, 150, 105, 0.32);
+.header-active-pill.active.clickable:hover {
+  background: #bbf7d0;
+  border-color: #86efac;
 }
 
-.btn-upload-text {
-  white-space: nowrap !important;
+.header-active-pill.empty {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+  cursor: pointer;
 }
 
-/* Clear Dataset Button */
-.btn-clear-dataset {
+.header-active-pill.empty:hover {
+  background: #f1f5f9;
+  color: #334155;
+}
+
+/* Square Action Icon Button ([ ↥ ]) */
+.btn-square-action {
+  width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 5px 10px;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #dc2626;
+  justify-content: center;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
-  font-size: 0.74rem;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.btn-square-action:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+/* Primary Upload CSV Button */
+.btn-primary-upload {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 14px;
+  background: #059669;
+  border: none;
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
   white-space: nowrap;
   flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(5, 150, 105, 0.2);
 }
 
-.btn-clear-dataset:hover {
-  background: #fee2e2;
-  border-color: #fca5a5;
-  color: #b91c1c;
-}
-
-/* Gemini AI Badge */
-.gemini-connected-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
-  border-radius: 9999px;
-  color: #059669;
-  font-size: 0.75rem;
-  font-weight: 600;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition: all 0.2s ease;
-}
-
-.gemini-connected-badge:hover {
-  background: #dcfce7;
-  border-color: #86efac;
-}
-
-.sparkle-active {
-  color: #10b981;
-  animation: pulse 2s infinite ease-in-out;
-  flex-shrink: 0;
-}
-
-/* User Profile Avatar */
-.user-profile-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: #064e3b;
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.72rem;
-  font-weight: 800;
-  cursor: pointer;
-  user-select: none;
-  position: relative;
-  border: 2px solid #ffffff;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.12);
-  flex-shrink: 0;
-  transition: transform 0.15s ease;
-}
-
-.user-profile-avatar:hover {
-  transform: scale(1.05);
-}
-
-.user-profile-avatar.small {
-  width: 30px;
-  height: 30px;
-  font-size: 0.68rem;
-}
-
-.avatar-online-dot {
-  position: absolute;
-  bottom: -1px;
-  right: -1px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #10b981;
-  border: 1.5px solid #ffffff;
+.btn-primary-upload:hover {
+  background: #047857;
+  box-shadow: 0 2px 6px rgba(5, 150, 105, 0.3);
 }
 
 /* Mobile Menu Toggle Button */
@@ -1974,19 +1814,20 @@ body {
   display: none;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border-radius: 8px;
-  background: #f8fafc;
+  background: #ffffff;
   border: 1px solid #e2e8f0;
   color: #334155;
   cursor: pointer;
   transition: all 0.15s ease;
   flex-shrink: 0;
+  padding: 0;
 }
 
 .btn-mobile-menu-toggle:hover {
-  background: #f1f5f9;
+  background: #f8fafc;
   color: #0f172a;
 }
 
@@ -2835,24 +2676,11 @@ body {
 @media (max-width: 1360px) {
   .dashboard-header-modern {
     padding: 8px 14px;
-    gap: 8px;
-  }
-  .dashboard-header-modern .header-brand-subtitle {
-    display: none;
-  }
-  .dataset-label-text {
-    max-width: 80px;
-  }
-  .gemini-badge-text {
-    display: none;
-  }
-  .gemini-connected-badge {
-    padding: 5px 8px;
+    gap: 10px;
   }
   .nav-tab-btn {
-    padding: 5px 9px;
-    font-size: 0.78rem;
-    gap: 4px;
+    padding: 5px 10px;
+    font-size: 0.8rem;
   }
 }
 
@@ -2900,47 +2728,25 @@ body {
     gap: 8px;
   }
 
-  .dashboard-header-modern .header-brand-subtitle {
-    display: none;
-  }
-
   .dashboard-header-modern .header-brand-title {
-    font-size: 0.94rem;
+    font-size: 0.92rem;
   }
 
-  .status-pill.dataset-active {
-    max-width: 125px;
-    padding: 4px 7px;
-    font-size: 0.7rem;
+  .header-active-pill {
+    padding: 5px 8px;
+    font-size: 0.72rem;
+    max-width: 140px;
   }
 
-  .dataset-label-text {
-    max-width: 80px;
-  }
-
-  .dataset-count-badge {
-    display: none;
-  }
-
-  .btn-clear-dataset .btn-text-responsive {
-    display: none;
-  }
-
-  .btn-clear-dataset {
-    padding: 5px 7px;
-  }
-
-  .btn-header-upload {
-    padding: 6px 11px;
+  .btn-primary-upload {
+    padding: 0 10px;
     font-size: 0.74rem;
+    height: 30px;
   }
 
-  .user-profile-avatar {
-    display: none;
-  }
-
-  .gemini-connected-badge {
-    display: none;
+  .btn-square-action {
+    width: 30px;
+    height: 30px;
   }
 
   /* Hero Section Adaptations */
@@ -3176,37 +2982,32 @@ body {
 /* ── Breakpoint: Small Mobile Phones (<= 480px) ── */
 @media (max-width: 480px) {
   .dashboard-header-modern {
-    padding: 8px 10px;
+    padding: 6px 10px;
   }
 
-  .header-brand-title .brand-full {
+  .dashboard-header-modern .header-brand-title {
+    font-size: 0.85rem;
+  }
+
+  .dashboard-header-modern .header-logo-badge {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+  }
+
+  .header-active-pill {
+    max-width: 110px;
+    font-size: 0.68rem;
+    padding: 4px 6px;
+  }
+
+  .btn-primary-upload {
     display: none;
   }
 
-  .header-brand-title .brand-short {
-    display: inline;
-  }
-
-  .header-logo-badge {
-    width: 34px;
-    height: 34px;
-    border-radius: 8px;
-  }
-
-  .status-pill.dataset-active {
-    max-width: 105px;
-    padding: 4px 6px;
-    font-size: 0.7rem;
-  }
-
-  .dataset-label-text {
-    max-width: 75px;
-  }
-
-  .btn-header-upload {
-    padding: 6px 9px;
-    font-size: 0.72rem;
-    gap: 4px;
+  .btn-square-action {
+    width: 28px;
+    height: 28px;
   }
 
   .floating-preview-card {
